@@ -113,7 +113,7 @@ class DepthLSSTransform(BaseDepthTransform):
                 depth_labels,
                 reduction='none',
             ).sum() / max(1.0, fg_mask.sum())
-        return 3 * depth_loss
+        return depth_loss
 
     @force_fp32()
     def get_cam_feats(self, x, d):
