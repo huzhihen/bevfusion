@@ -93,8 +93,8 @@ class BEVFusion(Base3DFusionModel):
                     self.loss_scale[name] = 1.0
 
         # If the camera's vtransform is a BEVDepth version, then we're using depth loss. 
-        self.use_depth_loss = ((encoders.get('camera', {}) or {}).get('vtransform', {}) or {}).get('type', '') in ['BEVDepth', 'AwareBEVDepth', 'DBEVDepth', 'AwareDBEVDepth']
-
+        # self.use_depth_loss = ((encoders.get('camera', {}) or {}).get('vtransform', {}) or {}).get('type', '') in ['BEVDepth', 'AwareBEVDepth', 'DBEVDepth', 'AwareDBEVDepth']
+        self.use_depth_loss = True
 
         self.init_weights()
 
@@ -356,7 +356,7 @@ class BEVFusion(Base3DFusionModel):
                         outputs[f"stats/{type}/{name}"] = val
             if self.use_depth_loss:
                 if 'depth' in auxiliary_losses:
-                    outputs["loss/depth"] = auxiliary_losses['depth']
+                    outputs["loss/depth"] = self.encoders["camera"]["vtransform"].get_depth_loss(depths, auxiliary_losses['depth'])
                 else:
                     raise ValueError('Use depth loss is true, but depth loss not found')
             return outputs

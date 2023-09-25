@@ -1,6 +1,8 @@
 from typing import Tuple
 
 import torch
+import torch.nn.functional as F
+from torch.cuda.amp.autocast_mode import autocast
 from mmcv.runner import force_fp32
 from torch import nn
 
@@ -78,6 +80,41 @@ class DepthLSSTransform(BaseDepthTransform):
         else:
             self.downsample = nn.Identity()
 
+    def get_downsampled_gt_depth(self, gt_depths, downsample=8):
+        """
+        Input:
+            gt_depths: [B, N, H, W]
+        Output:
+            gt_depths: [B*N*h*w, d]
+        """
+        B, N, H, W = gt_depths.shape
+        gt_depths = gt_depths.view(B * N, H // downsample, downsample, W // downsample, downsample, 1)
+        gt_depths = gt_depths.permute(0, 1, 3, 5, 2, 4).contiguous()
+        gt_depths = gt_depths.view(-1, downsample * downsample)
+        gt_depths_tmp = torch.where(gt_depths == 0.0, 1e5 * torch.ones_like(gt_depths), gt_depths)
+        gt_depths = torch.min(gt_depths_tmp, dim=-1).values
+        gt_depths = gt_depths.view(B * N, H // downsample, W // downsample)
+
+        gt_depths = (gt_depths - (1 - 0.5)) / 0.5
+        gt_depths = torch.where((gt_depths < self.D + 1) & (gt_depths >= 0.0), gt_depths, torch.zeros_like(gt_depths))
+        gt_depths = F.one_hot(gt_depths.long(), num_classes=self.D + 1).view(-1, self.D + 1)[:, 1:]
+        return gt_depths.float()
+
+    @force_fp32()
+    def get_depth_loss(self, depth_labels, depth_preds):
+        depth_labels = self.get_downsampled_gt_depth(depth_labels)
+        depth_preds = depth_preds.permute(0, 2, 3, 1).contiguous().view(-1, self.D)
+        fg_mask = torch.max(depth_labels, dim=1).values > 0.0
+        depth_labels = depth_labels[fg_mask]
+        depth_preds = depth_preds[fg_mask]
+        with autocast(enabled=False):
+            depth_loss = F.binary_cross_entropy(
+                depth_preds,
+                depth_labels,
+                reduction='none',
+            ).sum() / max(1.0, fg_mask.sum())
+        return 3 * depth_loss
+
     @force_fp32()
     def get_cam_feats(self, x, d):
         B, N, C, fH, fW = x.shape
@@ -94,9 +131,9 @@ class DepthLSSTransform(BaseDepthTransform):
 
         x = x.view(B, N, self.C, self.D, fH, fW)
         x = x.permute(0, 1, 3, 4, 5, 2)
-        return x
+        return x, depth
 
     def forward(self, *args, **kwargs):
         x = super().forward(*args, **kwargs)
-        x = self.downsample(x)
-        return x
+        final_x = self.downsample(x[0]), x[1]
+        return final_x
