@@ -137,10 +137,6 @@ class NuScenesDataset(Custom3DDataset):
         test_mode=False,
         eval_version="detection_cvpr_2019",
         use_valid_flag=False,
-        img_info_prototype="mmcv",
-        multi_adj_frame_id_cfg=None,
-        ego_cam="CAM_FRONT",
-        stereo=False
     ) -> None:
         self.load_interval = load_interval
         self.use_valid_flag = use_valid_flag
@@ -169,11 +165,6 @@ class NuScenesDataset(Custom3DDataset):
                 use_map=False,
                 use_external=False,
             )
-
-        self.img_info_prototype = img_info_prototype
-        self.multi_adj_frame_id_cfg = multi_adj_frame_id_cfg
-        self.ego_cam = ego_cam
-        self.stereo = stereo
 
     def get_cat_ids(self, idx):
         """Get category distribution of single scene.
@@ -232,8 +223,6 @@ class NuScenesDataset(Custom3DDataset):
             data.pop('location')
         if data['radar'] is None:
             data.pop('radar')
-        if 'ann_infos' in info:
-            data['ann_infos'] = info['ann_infos']
 
         # ego to global transform
         ego2global = np.eye(4).astype(np.float32)
@@ -293,28 +282,7 @@ class NuScenesDataset(Custom3DDataset):
 
         annos = self.get_ann_info(index)
         data["ann_info"] = annos
-        if 'bevdet' in self.img_info_prototype:
-            data.update(dict(curr=info))
-            if '4d' in self.img_info_prototype:
-                info_adj_list = self.get_adj_info(info, index)
-                data.update(dict(adjacent=info_adj_list))
         return data
-
-    def get_adj_info(self, info, index):
-        info_adj_list = []
-        adj_id_list = list(range(*self.multi_adj_frame_id_cfg))
-        if self.stereo:
-            assert self.multi_adj_frame_id_cfg[0] == 1
-            assert self.multi_adj_frame_id_cfg[2] == 1
-            adj_id_list.append(self.multi_adj_frame_id_cfg[1])
-        for select_id in adj_id_list:
-            select_id = max(index - select_id, 0)
-            if not self.data_infos[select_id]['scene_token'] == info[
-                    'scene_token']:
-                info_adj_list.append(info)
-            else:
-                info_adj_list.append(self.data_infos[select_id])
-        return info_adj_list
 
     def get_ann_info(self, index):
         """Get annotation info according to the given index.

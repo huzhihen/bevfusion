@@ -279,8 +279,6 @@ data:
       test_mode: false
       use_valid_flag: true
       box_type_3d: LiDAR
-      img_info_prototype: bevdet4d
-      multi_adj_frame_id_cfg: [1, 2, 1]
   val:
     type: ${dataset_type}
     dataset_root: ${dataset_root}
@@ -291,8 +289,6 @@ data:
     modality: ${input_modality}
     test_mode: false
     box_type_3d: LiDAR
-    img_info_prototype: bevdet4d
-    multi_adj_frame_id_cfg: [1, 2, 1]
   test:
     type: ${dataset_type}
     dataset_root: ${dataset_root}
