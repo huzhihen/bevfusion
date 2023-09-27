@@ -3,6 +3,7 @@ from typing import Tuple
 import torch
 from mmcv.runner import force_fp32
 from torch import nn
+from torch.nn import functional as F
 
 from mmdet3d.ops import bev_pool
 
@@ -327,6 +328,31 @@ class BaseDepthTransform(BaseTransform):
 
                 if self.add_depth_features:
                     depth[b, c, -points[b].shape[-1]:, masked_coords[:, 0], masked_coords[:, 1]] = points[b][boolmask2idx(on_img[c])].transpose(0,1)
+
+        step = 7
+        B, N, C, H, W = depth.size()
+        depth_tmp = depth.reshape(B * N, C, H, W)
+        pad = (step - 1) // 2
+        depth_tmp = F.pad(depth_tmp, [pad, pad, pad, pad], mode='constant', value=0)
+        patches = depth_tmp.unfold(dimension=2, size=step, step=1)
+        patches = patches.unfold(dimension=3, size=step, step=1)
+        max_depth, _ = patches.reshape(B, N, C, H, W, -1).max(dim=-1)  # [2, 6, 1, 256, 704]
+
+        # 求解max_depth四个方向梯度, 随后concat depth, 以缓解深度跳变对深度预测模块的影响
+        step = float(step)
+        shift_list = [[step / H, 0.0 / W], [-step / H, 0.0 / W], [0.0 / H, step / W], [0.0 / H, -step / W]]
+        max_depth_tmp = max_depth.reshape(B * N, C, H, W)
+        output_list = []
+        for shift in shift_list:
+            transform_matrix = torch.tensor([[1, 0, shift[0]], [0, 1, shift[1]]]).unsqueeze(0).repeat(B * N, 1, 1).cuda()
+            grid = F.affine_grid(transform_matrix, max_depth_tmp.shape).float()
+            output = F.grid_sample(max_depth_tmp, grid, mode='nearest').reshape(B, N, C, H, W)
+            output = max_depth - output
+            output_mask = ((output == max_depth) == False)
+            output = output * output_mask
+            output_list.append(output)
+        grad = torch.cat(output_list, dim=2)     # [2, 6, 4, 256, 704]
+        depth = torch.cat([depth, grad], dim=2)  # [2, 6, 5, 256, 704]
 
         extra_rots = lidar_aug_matrix[..., :3, :3]
         extra_trans = lidar_aug_matrix[..., :3, 3]
