@@ -38,7 +38,7 @@ class DepthLSSTransform(BaseDepthTransform):
             dbound=dbound,
         )
         self.dtransform = nn.Sequential(
-            nn.Conv2d(5, 8, 1),
+            nn.Conv2d(1, 8, 1),
             nn.BatchNorm2d(8),
             nn.ReLU(True),
             nn.Conv2d(8, 32, 5, stride=4, padding=2),
@@ -131,9 +131,13 @@ class DepthLSSTransform(BaseDepthTransform):
 
         x = x.view(B, N, self.C, self.D, fH, fW)
         x = x.permute(0, 1, 3, 4, 5, 2)
-        return x, depth
+        # return x, depth
+        return x
 
     def forward(self, *args, **kwargs):
+        # x = super().forward(*args, **kwargs)
+        # final_x = self.downsample(x[0]), x[1]
+        # return final_x
         x = super().forward(*args, **kwargs)
-        final_x = self.downsample(x[0]), x[1]
-        return final_x
+        x = self.downsample(x)
+        return x
