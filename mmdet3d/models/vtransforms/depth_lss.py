@@ -48,8 +48,19 @@ class DepthLSSTransform(BaseDepthTransform):
             nn.BatchNorm2d(64),
             nn.ReLU(True),
         )
+        self.etransform = nn.Sequential(
+            nn.Conv2d(4, 8, 1),
+            nn.BatchNorm2d(8),
+            nn.ReLU(True),
+            nn.Conv2d(8, 32, 5, stride=4, padding=2),
+            nn.BatchNorm2d(32),
+            nn.ReLU(True),
+            nn.Conv2d(32, 64, 5, stride=2, padding=2),
+            nn.BatchNorm2d(64),
+            nn.ReLU(True),
+        )
         self.depthnet = nn.Sequential(
-            nn.Conv2d(in_channels + 64, in_channels, 3, padding=1),
+            nn.Conv2d(in_channels + 64 + 64, in_channels, 3, padding=1),
             nn.BatchNorm2d(in_channels),
             nn.ReLU(True),
             nn.Conv2d(in_channels, in_channels, 3, padding=1),
@@ -116,14 +127,16 @@ class DepthLSSTransform(BaseDepthTransform):
         return depth_loss
 
     @force_fp32()
-    def get_cam_feats(self, x, d):
+    def get_cam_feats(self, x, d, e):
         B, N, C, fH, fW = x.shape
 
         d = d.view(B * N, *d.shape[2:])
+        e = e.view(B * N, *e.shape[2:])
         x = x.view(B * N, C, fH, fW)
 
         d = self.dtransform(d)
-        x = torch.cat([d, x], dim=1)
+        e = self.etransform(e)
+        x = torch.cat([d, e, x], dim=1)
         x = self.depthnet(x)
 
         depth = x[:, : self.D].softmax(dim=1)
