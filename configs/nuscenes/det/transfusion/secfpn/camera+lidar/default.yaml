@@ -54,9 +54,9 @@ model:
           - [0, 0]
         block_type: basicblock
 
-#lr_config: null
-#
-#optimizer:
-#  lr: 2.0e-4
-#
-#max_epochs: 6
+lr_config: null
+
+optimizer:
+  lr: 2.0e-4
+
+max_epochs: 6
