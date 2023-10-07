@@ -13,6 +13,96 @@ from .base import BaseDepthTransform
 __all__ = ["DepthLSSTransform"]
 
 
+class HoriConv(nn.Module):
+
+    def __init__(self, in_channels, mid_channels, out_channels, cat_dim=0):
+        """HoriConv that reduce the image feature
+            in height dimension and refine it.
+
+        Args:
+            in_channels (int): in_channels
+            mid_channels (int): mid_channels
+            out_channels (int): output channels
+            cat_dim (int, optional): channels of position
+                embedding. Defaults to 0.
+        """
+        super().__init__()
+
+        self.merger = nn.Sequential(
+            nn.Conv2d(in_channels + cat_dim, in_channels, kernel_size=1, bias=True),
+            nn.Sigmoid(),
+            nn.Conv2d(in_channels, in_channels, kernel_size=1, bias=True),
+        )
+
+        self.reduce_conv = nn.Sequential(
+            nn.Conv1d(in_channels, mid_channels, kernel_size=3, stride=1, padding=1, bias=False),
+            nn.BatchNorm1d(mid_channels),
+            nn.ReLU(inplace=True),
+        )
+
+        self.conv1 = nn.Sequential(
+            nn.Conv1d(mid_channels, mid_channels, kernel_size=3, stride=1, padding=1, bias=False),
+            nn.BatchNorm1d(mid_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv1d(mid_channels, mid_channels, kernel_size=3, stride=1, padding=1, bias=False),
+            nn.BatchNorm1d(mid_channels),
+            nn.ReLU(inplace=True),
+        )
+
+        self.conv2 = nn.Sequential(
+            nn.Conv1d(mid_channels, mid_channels, kernel_size=3, stride=1, padding=1, bias=False),
+            nn.BatchNorm1d(mid_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv1d(mid_channels, mid_channels, kernel_size=3, stride=1, padding=1, bias=False),
+            nn.BatchNorm1d(mid_channels),
+            nn.ReLU(inplace=True),
+        )
+
+        self.out_conv = nn.Sequential(
+            nn.Conv1d(mid_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=True),
+            nn.BatchNorm1d(out_channels),
+            nn.ReLU(inplace=True),
+        )
+
+    @autocast(False)
+    def forward(self, x, pe=None):
+        if pe is not None:
+            x = self.merger(torch.cat([x, pe], 1))
+        else:
+            x = self.merger(x)
+        x = x.max(dim=2)[0]
+        x = self.reduce_conv(x)
+        x = self.conv1(x) + x
+        x = self.conv2(x) + x
+        x = self.out_conv(x)
+        return x
+
+
+class DepthReducer(nn.Module):
+
+    def __init__(self, img_channels, mid_channels):
+        """Module that compresses the predicted
+            categorical depth in height dimension
+
+        Args:
+            img_channels (int): in_channels
+            mid_channels (int): mid_channels
+        """
+        super().__init__()
+        self.vertical_weighter = nn.Sequential(
+            nn.Conv2d(img_channels, mid_channels, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(mid_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(mid_channels, 1, kernel_size=3, stride=1, padding=1),
+        )
+
+    @autocast(False)
+    def forward(self, feat, depth):
+        vert_weight = self.vertical_weighter(feat).softmax(dim=2)  # [N,1,H,W]
+        depth = (depth * vert_weight).sum(dim=2)
+        return depth
+
+
 @VTRANSFORMS.register_module()
 class DepthLSSTransform(BaseDepthTransform):
     def __init__(
@@ -91,6 +181,9 @@ class DepthLSSTransform(BaseDepthTransform):
         else:
             self.downsample = nn.Identity()
 
+        self.horiconv = HoriConv(self.C, self.C * 2, self.C)
+        self.depth_reducer = DepthReducer(self.C, self.C)
+
     def get_downsampled_gt_depth(self, gt_depths, downsample=8):
         """
         Input:
@@ -140,17 +233,14 @@ class DepthLSSTransform(BaseDepthTransform):
         x = self.depthnet(x)
 
         depth = x[:, : self.D].softmax(dim=1)
-        x = depth.unsqueeze(1) * x[:, self.D : (self.D + self.C)].unsqueeze(2)
-
-        x = x.view(B, N, self.C, self.D, fH, fW)
-        x = x.permute(0, 1, 3, 4, 5, 2)
-        # return x, depth
-        return x
+        x = x[:, self.D: (self.D + self.C)]
+        return x, depth
+        # x = depth.unsqueeze(1) * x[:, self.D : (self.D + self.C)].unsqueeze(2)
+        # x = x.view(B, N, self.C, self.D, fH, fW)
+        # x = x.permute(0, 1, 3, 4, 5, 2)
+        # return x
 
     def forward(self, *args, **kwargs):
-        # x = super().forward(*args, **kwargs)
-        # final_x = self.downsample(x[0]), x[1]
-        # return final_x
         x = super().forward(*args, **kwargs)
         x = self.downsample(x)
         return x

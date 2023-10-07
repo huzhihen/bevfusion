@@ -61,6 +61,7 @@ class BaseTransform(nn.Module):
         self.C = out_channels
         self.frustum = self.create_frustum()
         self.D = self.frustum.shape[0]
+        self.bev_anchors = self.create_bev_anchors()
         self.fp16_enabled = False
 
     @force_fp32()
@@ -88,6 +89,29 @@ class BaseTransform(nn.Module):
 
         frustum = torch.stack((xs, ys, ds), -1)
         return nn.Parameter(frustum, requires_grad=False)
+
+    @force_fp32()
+    def create_bev_anchors(self, ds_rate=1):
+        x_coords = ((torch.linspace(
+            self.xbound[0],
+            self.xbound[1] - self.xbound[2] * ds_rate,
+            self.nx[0] // ds_rate,
+            dtype=torch.float,
+        ) + self.xbound[2] * ds_rate / 2).view(self.nx[0] // ds_rate, 1).expand(
+            self.nx[0] // ds_rate,
+            self.nx[1] // ds_rate))
+
+        y_coords = ((torch.linspace(
+            self.ybound[0],
+            self.ybound[1] - self.ybound[2] * ds_rate,
+            self.nx[1] // ds_rate,
+            dtype=torch.float,
+        ) + self.ybound[2] * ds_rate / 2).view(1, self.nx[1] // ds_rate).expand(
+            self.nx[0] // ds_rate,
+            self.nx[1] // ds_rate))
+
+        anchors = torch.stack([x_coords, y_coords]).permute(1, 2, 0)
+        return nn.Parameter(anchors, requires_grad=False)
 
     @force_fp32()
     def get_geometry(
@@ -238,6 +262,81 @@ class BaseTransform(nn.Module):
 
 class BaseDepthTransform(BaseTransform):
     @force_fp32()
+    def get_proj_mat(self, geom=None, mats_dict=None):
+        """Create the Ring Matrix and Ray Matrix
+
+        Args:
+            mats_dict (dict, optional): dictionary that
+                contains intrin- and extrin- parameters.
+            Defaults to None.
+
+        Returns:
+            tuple: Ring Matrix in [B, D, L, L] and Ray Matrix in [B, W, L, L]
+        """
+
+        bev_size = int(self.nx[0])  # only consider square BEV
+        geom_sep = (geom - (self.bx - self.dx / 2.0)) / self.dx
+        geom_sep = geom_sep.mean(3).permute(0, 1, 3, 2, 4).contiguous()  # B,Ncam,W,D,2
+        B, Nc, W, D, _ = geom_sep.shape
+        geom_sep = geom_sep.long().view(B, Nc * W, D, -1)[..., :2]
+
+        invalid1 = torch.logical_or((geom_sep < 0)[..., 0], (geom_sep < 0)[..., 1])
+        invalid2 = torch.logical_or((geom_sep > (bev_size - 1))[..., 0],
+                                    (geom_sep > (bev_size - 1))[..., 1])
+        geom_sep[(invalid1 | invalid2)] = int(bev_size / 2)
+        geom_idx = geom_sep[..., 1] * bev_size + geom_sep[..., 0]
+
+        geom_uni = self.bev_anchors[None].repeat([B, 1, 1, 1])  # B,128,128,2
+        B, L, L, _ = geom_uni.shape
+
+        circle_map = geom_uni.new_zeros((B, D, L * L))
+        ray_map = geom_uni.new_zeros((B, Nc * W, L * L))
+        for b in range(B):
+            for dir in range(Nc * W):
+                ray_map[b, dir, geom_idx[b, dir]] += 1
+            for d in range(D):
+                circle_map[b, d, geom_idx[b, :, d]] += 1
+        null_point = int((bev_size / 2) * (bev_size + 1))
+        circle_map[..., null_point] = 0
+        ray_map[..., null_point] = 0
+        circle_map = circle_map.view(B, D, L * L)
+        ray_map = ray_map.view(B, -1, L * L)
+        circle_map /= circle_map.max(1)[0].clip(min=1)[:, None]
+        ray_map /= ray_map.max(1)[0].clip(min=1)[:, None]
+
+        return circle_map, ray_map
+
+    @force_fp32()
+    def reduce_and_project(self, feature, depth, geom, mats_dict):
+        """reduce the feature and depth in height
+            dimension and make BEV feature
+
+        Args:
+            feature (Tensor): image feature in [B, C, H, W]
+            depth (Tensor): Depth Prediction in [B, D, H, W]
+            mats_dict (dict): dictionary that contains intrin-
+                and extrin- parameters
+
+        Returns:
+            Tensor: BEV feature in B, C, L, L
+        """
+        # [N,64,H,W], [N,256,H,W]
+        depth = self.depth_reducer(feature, depth)
+        B = mats_dict['intrin_mats'].shape[0]
+        feature = self.horiconv(feature)
+        depth = depth.permute(0, 2, 1).reshape(B, -1, self.D)
+        feature = feature.permute(0, 2, 1).reshape(B, -1, self.C)
+        circle_map, ray_map = self.get_proj_mat(geom, mats_dict)
+
+        proj_mat = depth.matmul(circle_map)
+        proj_mat = (proj_mat * ray_map).permute(0, 2, 1)
+        img_feat_with_depth = proj_mat.matmul(feature)
+        img_feat_with_depth = img_feat_with_depth.permute(0, 2, 1).reshape(
+            B, -1, *self.nx[:2])
+
+        return img_feat_with_depth
+
+    @force_fp32()
     def forward(
         self,
         img,
@@ -376,11 +475,12 @@ class BaseDepthTransform(BaseTransform):
         if type(x) == tuple:
             x, depth = x 
             use_depth = True
-        
-        x = self.bev_pool(geom, x)
 
-        if use_depth:
-            return x, depth 
-        else:
-            return x
+        x = self.reduce_and_project(x, depth, geom, mats_dict)
+        return x
+        # x = self.bev_pool(geom, x)
+        # if use_depth:
+        #     return x, depth
+        # else:
+        #     return x
 
