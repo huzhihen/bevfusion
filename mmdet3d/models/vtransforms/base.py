@@ -61,7 +61,7 @@ class BaseTransform(nn.Module):
         self.C = out_channels
         self.frustum = self.create_frustum()
         self.D = self.frustum.shape[0]
-        self.bev_anchors = self.create_bev_anchors()
+        # self.bev_anchors = self.create_bev_anchors()
         self.fp16_enabled = False
 
     @force_fp32()
@@ -276,7 +276,7 @@ class BaseDepthTransform(BaseTransform):
 
         bev_size = int(self.nx[0])  # only consider square BEV
         geom_sep = (geom - (self.bx - self.dx / 2.0)) / self.dx
-        geom_sep = geom_sep.mean(3).permute(0, 1, 3, 2, 4).contiguous()  # B,Ncam,W,D,2
+        geom_sep = geom_sep.mean(3).permute(0, 1, 3, 2, 4).contiguous()
         B, Nc, W, D, _ = geom_sep.shape
         geom_sep = geom_sep.long().view(B, Nc * W, D, -1)[..., :2]
 
@@ -286,7 +286,7 @@ class BaseDepthTransform(BaseTransform):
         geom_sep[(invalid1 | invalid2)] = int(bev_size / 2)
         geom_idx = geom_sep[..., 1] * bev_size + geom_sep[..., 0]
 
-        geom_uni = self.bev_anchors[None].repeat([B, 1, 1, 1])  # B,128,128,2
+        geom_uni = self.bev_anchors[None].repeat([B, 1, 1, 1])
         B, L, L, _ = geom_uni.shape
 
         circle_map = geom_uni.new_zeros((B, D, L * L))
@@ -320,7 +320,6 @@ class BaseDepthTransform(BaseTransform):
         Returns:
             Tensor: BEV feature in B, C, L, L
         """
-        # [N,64,H,W], [N,256,H,W]
         depth = self.depth_reducer(feature, depth)
         B = mats_dict['intrin_mats'].shape[0]
         feature = self.horiconv(feature)
@@ -476,11 +475,11 @@ class BaseDepthTransform(BaseTransform):
             x, depth = x 
             use_depth = True
 
-        x = self.reduce_and_project(x, depth, geom, mats_dict)
-        return x
-        # x = self.bev_pool(geom, x)
-        # if use_depth:
-        #     return x, depth
-        # else:
-        #     return x
+        # x = self.reduce_and_project(x, depth, geom, mats_dict)
+        # return x
+        x = self.bev_pool(geom, x)
+        if use_depth:
+            return x, depth
+        else:
+            return x
 

@@ -98,7 +98,7 @@ class DepthReducer(nn.Module):
 
     @autocast(False)
     def forward(self, feat, depth):
-        vert_weight = self.vertical_weighter(feat).softmax(dim=2)  # [N,1,H,W]
+        vert_weight = self.vertical_weighter(feat).softmax(dim=2)
         depth = (depth * vert_weight).sum(dim=2)
         return depth
 
@@ -181,8 +181,8 @@ class DepthLSSTransform(BaseDepthTransform):
         else:
             self.downsample = nn.Identity()
 
-        self.horiconv = HoriConv(self.C, self.C * 2, self.C)
-        self.depth_reducer = DepthReducer(self.C, self.C)
+        # self.horiconv = HoriConv(self.C, 512, self.C)
+        # self.depth_reducer = DepthReducer(self.C, self.C)
 
     def get_downsampled_gt_depth(self, gt_depths, downsample=8):
         """
@@ -205,7 +205,7 @@ class DepthLSSTransform(BaseDepthTransform):
         return gt_depths.float()
 
     @force_fp32()
-    def get_depth_loss(self, depth_labels, depth_preds):
+    def get_depth_loss(self, depth_labels, depth_preds, loss_depth_weight=3.0):
         depth_labels = self.get_downsampled_gt_depth(depth_labels)
         depth_preds = depth_preds.permute(0, 2, 3, 1).contiguous().view(-1, self.D)
         fg_mask = torch.max(depth_labels, dim=1).values > 0.0
@@ -217,7 +217,7 @@ class DepthLSSTransform(BaseDepthTransform):
                 depth_labels,
                 reduction='none',
             ).sum() / max(1.0, fg_mask.sum())
-        return depth_loss
+        return depth_loss * loss_depth_weight
 
     @force_fp32()
     def get_cam_feats(self, x, d, e):
@@ -233,14 +233,18 @@ class DepthLSSTransform(BaseDepthTransform):
         x = self.depthnet(x)
 
         depth = x[:, : self.D].softmax(dim=1)
-        x = x[:, self.D: (self.D + self.C)]
+
+        # x = x[:, self.D: (self.D + self.C)]
+        # return x, depth
+        x = depth.unsqueeze(1) * x[:, self.D : (self.D + self.C)].unsqueeze(2)
+        x = x.view(B, N, self.C, self.D, fH, fW)
+        x = x.permute(0, 1, 3, 4, 5, 2)
         return x, depth
-        # x = depth.unsqueeze(1) * x[:, self.D : (self.D + self.C)].unsqueeze(2)
-        # x = x.view(B, N, self.C, self.D, fH, fW)
-        # x = x.permute(0, 1, 3, 4, 5, 2)
-        # return x
 
     def forward(self, *args, **kwargs):
         x = super().forward(*args, **kwargs)
-        x = self.downsample(x)
-        return x
+        final_x = self.downsample(x[0]), x[1]
+        return final_x
+        # x = super().forward(*args, **kwargs)
+        # x = self.downsample(x)
+        # return x
