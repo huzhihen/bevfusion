@@ -474,12 +474,13 @@ class BaseDepthTransform(BaseTransform):
         if type(x) == tuple:
             x, depth = x 
             use_depth = True
-
-        # x = self.reduce_and_project(x, depth, geom, mats_dict)
-        # return x
+        
         x = self.bev_pool(geom, x)
+
         if use_depth:
-            return x, depth
+            return x, depth 
         else:
             return x
+        # x = self.reduce_and_project(x, depth, geom, mats_dict)
+        # return x
 
