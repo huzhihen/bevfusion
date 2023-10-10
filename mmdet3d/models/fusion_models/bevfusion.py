@@ -116,6 +116,7 @@ class BEVFusion(Base3DFusionModel):
         lidar_aug_matrix,
         img_metas,
         gt_depths=None,
+        gt_sematic=None,
     ) -> torch.Tensor:
         B, N, C, H, W = x.size()
         x = x.view(B * N, C, H, W)
@@ -144,6 +145,7 @@ class BEVFusion(Base3DFusionModel):
             img_metas,
             depth_loss=self.use_depth_loss, 
             gt_depths=gt_depths,
+            gt_sematic=gt_sematic,
         )
         return x
     
@@ -240,6 +242,7 @@ class BEVFusion(Base3DFusionModel):
         lidar_aug_matrix,
         metas,
         depths,
+        sematic,
         radar=None,
         gt_masks_bev=None,
         gt_bboxes_3d=None,
@@ -262,6 +265,7 @@ class BEVFusion(Base3DFusionModel):
                 lidar_aug_matrix,
                 metas,
                 depths,
+                sematic,
                 radar,
                 gt_masks_bev,
                 gt_bboxes_3d,
@@ -285,6 +289,7 @@ class BEVFusion(Base3DFusionModel):
         lidar_aug_matrix,
         metas,
         depths=None,
+        sematic=None,
         radar=None,
         gt_masks_bev=None,
         gt_bboxes_3d=None,
@@ -311,6 +316,7 @@ class BEVFusion(Base3DFusionModel):
                     lidar_aug_matrix,
                     metas,
                     gt_depths=depths,
+                    gt_sematic=sematic,
                 )
                 if self.use_depth_loss:
                     feature, auxiliary_losses['depth'] = feature[0], feature[-1]

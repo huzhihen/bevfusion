@@ -5,7 +5,7 @@ radar_compensate_velocity: true
 radar_filtering: none
 
 radar_voxel_size: [0.8, 0.8, 8]
-image_size: [256, 704]
+image_size: [512, 1408]
 radar_jitter: 0
 radar_normalize: false
 
