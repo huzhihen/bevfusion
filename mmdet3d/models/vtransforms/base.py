@@ -61,7 +61,7 @@ class BaseTransform(nn.Module):
         self.C = out_channels
         self.frustum = self.create_frustum()
         self.D = self.frustum.shape[0]
-        self.bev_anchors = self.create_bev_anchors()
+        # self.bev_anchors = self.create_bev_anchors()
         self.fp16_enabled = False
 
     @force_fp32()
@@ -448,7 +448,7 @@ class BaseDepthTransform(BaseTransform):
             output_mask = ((output == max_depth) == False)
             output = output * output_mask
             output_list.append(output)
-        grad = torch.cat(output_list, dim=2)
+        edge = torch.cat(output_list, dim=2)
 
         extra_rots = lidar_aug_matrix[..., :3, :3]
         extra_trans = lidar_aug_matrix[..., :3, 3]
@@ -468,19 +468,19 @@ class BaseDepthTransform(BaseTransform):
             'bda_mat': lidar_aug_matrix,
             'sensor2ego_mats': sensor2ego, 
         }
-        x = self.get_cam_feats(img, depth, grad, mats_dict)
+        x = self.get_cam_feats(img, depth, edge, mats_dict)
 
         use_depth = False
         if type(x) == tuple:
             x, depth = x 
             use_depth = True
         
-        # x = self.bev_pool(geom, x)
-        #
-        # if use_depth:
-        #     return x, depth
-        # else:
-        #     return x
-        x = self.reduce_and_project(x, depth, geom, mats_dict)
-        return x
+        x = self.bev_pool(geom, x)
+
+        if use_depth:
+            return x, depth 
+        else:
+            return x
+        # x = self.reduce_and_project(x, depth, geom, mats_dict)
+        # return x
 

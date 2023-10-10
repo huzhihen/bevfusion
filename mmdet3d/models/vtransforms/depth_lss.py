@@ -320,8 +320,8 @@ class DepthLSSTransform(BaseDepthTransform):
             nn.BatchNorm2d(64),
             nn.ReLU(True),
         )
-        # self.depthnet = DepthNet(in_channels, in_channels, self.C, self.D)
-        self.depthnet = nn.Sequential(
+        self.depthnet = DepthNet(in_channels, in_channels, self.C, self.D)
+        self.edgenet = nn.Sequential(
             nn.Conv2d(in_channels + 64 + 64, in_channels, 3, padding=1),
             nn.BatchNorm2d(in_channels),
             nn.ReLU(True),
@@ -330,6 +330,16 @@ class DepthLSSTransform(BaseDepthTransform):
             nn.ReLU(True),
             nn.Conv2d(in_channels, self.D + self.C, 1),
         )
+        self.edgenet = nn.Sequential(
+            nn.Conv2d(in_channels + 64 + 64, in_channels, 3, padding=1),
+            nn.BatchNorm2d(in_channels),
+            nn.ReLU(True),
+            nn.Conv2d(in_channels, in_channels, 3, padding=1),
+            nn.BatchNorm2d(in_channels),
+            nn.ReLU(True),
+            nn.Conv2d(in_channels, self.D + self.C, 1),
+        )
+        self.fusion_layer = nn.Conv2d(self.C * 2, self.C, kernel_size=1, stride=1, padding=0)
         if downsample > 1:
             assert downsample == 2, downsample
             self.downsample = nn.Sequential(
@@ -353,8 +363,8 @@ class DepthLSSTransform(BaseDepthTransform):
         else:
             self.downsample = nn.Identity()
 
-        self.horiconv = HoriConv(self.C, 512, self.C)
-        self.depth_reducer = DepthReducer(self.C, self.C)
+        # self.horiconv = HoriConv(self.C, 512, self.C)
+        # self.depth_reducer = DepthReducer(self.C, self.C)
 
     def get_downsampled_gt_depth(self, gt_depths, downsample=8):
         """
@@ -398,25 +408,27 @@ class DepthLSSTransform(BaseDepthTransform):
         d = d.view(B * N, *d.shape[2:])
         e = e.view(B * N, *e.shape[2:])
         x = x.view(B * N, C, fH, fW)
+        x1 = self.depthnet(x, mats_dict)
 
         d = self.dtransform(d)
         e = self.etransform(e)
-        x = torch.cat([d, e, x], dim=1)
-        x = self.depthnet(x)
+        x2 = torch.cat([d, e, x], dim=1)
+        x2 = self.edgenet(x2)
 
-        depth = x[:, : self.D].softmax(dim=1)
-        # x = depth.unsqueeze(1) * x[:, self.D : (self.D + self.C)].unsqueeze(2)
-        #
-        # x = x.view(B, N, self.C, self.D, fH, fW)
-        # x = x.permute(0, 1, 3, 4, 5, 2)
-        # return x
-        x = x[:, self.D: (self.D + self.C)]
+        depth = (x1[:, : self.D] + x2[:, : self.D]).softmax(dim=1)
+        context = self.fusion_layer(torch.cat([x1[:, self.D: (self.D + self.C)], x2[:, self.D: (self.D + self.C)]], dim=1))
+        x = depth.unsqueeze(1) * context.unsqueeze(2)
+
+        x = x.view(B, N, self.C, self.D, fH, fW)
+        x = x.permute(0, 1, 3, 4, 5, 2)
         return x, depth
+        # x = x[:, self.D: (self.D + self.C)]
+        # return x, depth
 
     def forward(self, *args, **kwargs):
-        x = super().forward(*args, **kwargs)
-        x = self.downsample(x)
-        return x
         # x = super().forward(*args, **kwargs)
-        # final_x = self.downsample(x[0]), x[1]
-        # return final_x
+        # x = self.downsample(x)
+        # return x
+        x = super().forward(*args, **kwargs)
+        final_x = self.downsample(x[0]), x[1]
+        return final_x
