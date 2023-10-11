@@ -414,14 +414,14 @@ class DepthLSSTransform(BaseDepthTransform):
 
         x = x.view(B, N, self.C, self.D, fH, fW)
         x = x.permute(0, 1, 3, 4, 5, 2)
-        return x, depth
+        return x
         # x = x[:, self.D: (self.D + self.C)]
         # return x, depth
 
     def forward(self, *args, **kwargs):
-        # x = super().forward(*args, **kwargs)
-        # x = self.downsample(x)
-        # return x
         x = super().forward(*args, **kwargs)
-        final_x = self.downsample(x[0]), x[1]
-        return final_x
+        x = self.downsample(x)
+        return x
+        # x = super().forward(*args, **kwargs)
+        # final_x = self.downsample(x[0]), x[1]
+        # return final_x
