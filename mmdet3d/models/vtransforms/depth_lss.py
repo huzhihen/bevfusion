@@ -320,18 +320,9 @@ class DepthLSSTransform(BaseDepthTransform):
             nn.BatchNorm2d(64),
             nn.ReLU(True),
         )
-        self.depthnet = DepthNet(in_channels, in_channels, self.C, self.D)
+        self.depthnet = DepthNet(in_channels + 64, in_channels, self.C, self.D)
         self.edgenet = nn.Sequential(
-            nn.Conv2d(in_channels + 64 + 64, in_channels, 3, padding=1),
-            nn.BatchNorm2d(in_channels),
-            nn.ReLU(True),
-            nn.Conv2d(in_channels, in_channels, 3, padding=1),
-            nn.BatchNorm2d(in_channels),
-            nn.ReLU(True),
-            nn.Conv2d(in_channels, self.D + self.C, 1),
-        )
-        self.edgenet = nn.Sequential(
-            nn.Conv2d(in_channels + 64 + 64, in_channels, 3, padding=1),
+            nn.Conv2d(in_channels + 64, in_channels, 3, padding=1),
             nn.BatchNorm2d(in_channels),
             nn.ReLU(True),
             nn.Conv2d(in_channels, in_channels, 3, padding=1),
@@ -406,13 +397,15 @@ class DepthLSSTransform(BaseDepthTransform):
         B, N, C, fH, fW = x.shape
 
         d = d.view(B * N, *d.shape[2:])
-        e = e.view(B * N, *e.shape[2:])
-        x = x.view(B * N, C, fH, fW)
-        x1 = self.depthnet(x, mats_dict)
-
         d = self.dtransform(d)
+        e = e.view(B * N, *e.shape[2:])
         e = self.etransform(e)
-        x2 = torch.cat([d, e, x], dim=1)
+        x = x.view(B * N, C, fH, fW)
+
+        x1 = torch.cat([d, x], dim=1)
+        x1 = self.depthnet(x1, mats_dict)
+
+        x2 = torch.cat([e, x], dim=1)
         x2 = self.edgenet(x2)
 
         depth = (x1[:, : self.D] + x2[:, : self.D]).softmax(dim=1)
