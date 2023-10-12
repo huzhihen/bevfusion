@@ -309,19 +309,7 @@ class DepthLSSTransform(BaseDepthTransform):
             nn.BatchNorm2d(64),
             nn.ReLU(True),
         )
-        self.etransform = nn.Sequential(
-            nn.Conv2d(4, 8, 1),
-            nn.BatchNorm2d(8),
-            nn.ReLU(True),
-            nn.Conv2d(8, 32, 5, stride=4, padding=2),
-            nn.BatchNorm2d(32),
-            nn.ReLU(True),
-            nn.Conv2d(32, 64, 5, stride=2, padding=2),
-            nn.BatchNorm2d(64),
-            nn.ReLU(True),
-        )
-        self.depthnet = DepthNet(in_channels + 64, in_channels, self.C, self.D)
-        self.edgenet = nn.Sequential(
+        self.depthnet = nn.Sequential(
             nn.Conv2d(in_channels + 64, in_channels, 3, padding=1),
             nn.BatchNorm2d(in_channels),
             nn.ReLU(True),
@@ -330,7 +318,28 @@ class DepthLSSTransform(BaseDepthTransform):
             nn.ReLU(True),
             nn.Conv2d(in_channels, self.D + self.C, 1),
         )
-        self.fusion_layer = nn.Conv2d(self.C * 2, self.C, kernel_size=1, stride=1, padding=0)
+        # self.etransform = nn.Sequential(
+        #     nn.Conv2d(4, 8, 1),
+        #     nn.BatchNorm2d(8),
+        #     nn.ReLU(True),
+        #     nn.Conv2d(8, 32, 5, stride=4, padding=2),
+        #     nn.BatchNorm2d(32),
+        #     nn.ReLU(True),
+        #     nn.Conv2d(32, 64, 5, stride=2, padding=2),
+        #     nn.BatchNorm2d(64),
+        #     nn.ReLU(True),
+        # )
+        # self.depthnet = DepthNet(in_channels + 64, in_channels, self.C, self.D)
+        # self.edgenet = nn.Sequential(
+        #     nn.Conv2d(in_channels + 64, in_channels, 3, padding=1),
+        #     nn.BatchNorm2d(in_channels),
+        #     nn.ReLU(True),
+        #     nn.Conv2d(in_channels, in_channels, 3, padding=1),
+        #     nn.BatchNorm2d(in_channels),
+        #     nn.ReLU(True),
+        #     nn.Conv2d(in_channels, self.D + self.C, 1),
+        # )
+        # self.fusion_layer = nn.Conv2d(self.C * 2, self.C, kernel_size=1, stride=1, padding=0)
         if downsample > 1:
             assert downsample == 2, downsample
             self.downsample = nn.Sequential(
@@ -393,24 +402,18 @@ class DepthLSSTransform(BaseDepthTransform):
         return depth_loss * loss_depth_weight
 
     @force_fp32()
-    def get_cam_feats(self, x, d, e, mats_dict):
+    def get_cam_feats(self, x, d):
         B, N, C, fH, fW = x.shape
 
         d = d.view(B * N, *d.shape[2:])
-        d = self.dtransform(d)
-        e = e.view(B * N, *e.shape[2:])
-        e = self.etransform(e)
         x = x.view(B * N, C, fH, fW)
 
-        x1 = torch.cat([d, x], dim=1)
-        x1 = self.depthnet(x1, mats_dict)
+        d = self.dtransform(d)
+        x = torch.cat([d, x], dim=1)
+        x = self.depthnet(x)
 
-        x2 = torch.cat([e, x], dim=1)
-        x2 = self.edgenet(x2)
-
-        depth = (x1[:, : self.D] + x2[:, : self.D]).softmax(dim=1)
-        context = self.fusion_layer(torch.cat([x1[:, self.D: (self.D + self.C)], x2[:, self.D: (self.D + self.C)]], dim=1))
-        x = depth.unsqueeze(1) * context.unsqueeze(2)
+        depth = x[:, : self.D].softmax(dim=1)
+        x = depth.unsqueeze(1) * x[:, self.D : (self.D + self.C)].unsqueeze(2)
 
         x = x.view(B, N, self.C, self.D, fH, fW)
         x = x.permute(0, 1, 3, 4, 5, 2)
