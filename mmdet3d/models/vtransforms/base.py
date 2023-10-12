@@ -428,7 +428,7 @@ class BaseDepthTransform(BaseTransform):
                     depth[b, c, -points[b].shape[-1]:, masked_coords[:, 0], masked_coords[:, 1]] = points[b][boolmask2idx(on_img[c])].transpose(0,1)
 
         step = 7
-        B, N, C, H, W = depth.size()
+        B, N, C, H, W = depth.size()  # [B, N, 1, 256, 704]
         depth_tmp = depth.reshape(B * N, C, H, W)
         pad = (step - 1) // 2
         depth_tmp = F.pad(depth_tmp, [pad, pad, pad, pad], mode='constant', value=0)
@@ -448,7 +448,8 @@ class BaseDepthTransform(BaseTransform):
             output_mask = ((output == max_depth) == False)
             output = output * output_mask
             output_list.append(output)
-        edge = torch.cat(output_list, dim=2)
+        edge = torch.cat(output_list, dim=2)  # [B, N, 4, 256, 704]
+        sematic = kwargs['gt_sematic'].unsqueeze(2)  # [B, N, 1, 256, 704]
 
         extra_rots = lidar_aug_matrix[..., :3, :3]
         extra_trans = lidar_aug_matrix[..., :3, 3]
