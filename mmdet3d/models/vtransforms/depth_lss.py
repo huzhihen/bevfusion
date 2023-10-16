@@ -363,8 +363,9 @@ class DepthLSSTransform(BaseDepthTransform):
         else:
             self.downsample = nn.Identity()
 
-        # self.horiconv = HoriConv(self.C, 512, self.C)
-        # self.depth_reducer = DepthReducer(self.C, self.C)
+        if self.use_bevpool == 'matrixvt':
+            self.horiconv = HoriConv(self.C, 512, self.C)
+            self.depth_reducer = DepthReducer(self.C, self.C)
 
     def get_downsampled_gt_depth(self, gt_depths, downsample=8):
         """
@@ -412,14 +413,23 @@ class DepthLSSTransform(BaseDepthTransform):
         x = torch.cat([d, x], dim=1)
         x = self.depthnet(x)
 
-        depth = x[:, : self.D].softmax(dim=1)
-        x = depth.unsqueeze(1) * x[:, self.D : (self.D + self.C)].unsqueeze(2)
+        if self.use_bevpool == 'bevpoolv1':
+            depth = x[:, : self.D].softmax(dim=1)
+            x = depth.unsqueeze(1) * x[:, self.D: (self.D + self.C)].unsqueeze(2)
+            x = x.view(B, N, self.C, self.D, fH, fW)
+            x = x.permute(0, 1, 3, 4, 5, 2)
 
-        x = x.view(B, N, self.C, self.D, fH, fW)
-        x = x.permute(0, 1, 3, 4, 5, 2)
-        return x
-        # x = x[:, self.D: (self.D + self.C)]
-        # return x, depth
+        elif self.use_bevpool == 'bevpoolv2':
+            depth = x[:, : self.D].softmax(dim=1)
+            x = x[:, self.D: (self.D + self.C)]
+            depth = depth.view(B, N, self.D, fH, fW)
+            x = x.view(B, N, self.C, fH, fW)
+
+        elif self.use_bevpool == 'matrixvt':
+            depth = x[:, : self.D].softmax(dim=1)
+            x = x[:, self.D: (self.D + self.C)]
+
+        return x, depth
 
     def forward(self, *args, **kwargs):
         x = super().forward(*args, **kwargs)

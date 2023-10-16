@@ -6,6 +6,7 @@ from torch import nn
 from torch.nn import functional as F
 
 from mmdet3d.ops import bev_pool
+from mmdet3d.ops.bev_pool_v2.bev_pool import bev_pool_v2
 
 __all__ = ["BaseTransform", "BaseDepthTransform"]
 
@@ -15,11 +16,12 @@ def boolmask2idx(mask):
 
 def gen_dx_bx(xbound, ybound, zbound):
     dx = torch.Tensor([row[2] for row in [xbound, ybound, zbound]])
+    cx = torch.Tensor([row[0] for row in [xbound, ybound, zbound]])
     bx = torch.Tensor([row[0] + row[2] / 2.0 for row in [xbound, ybound, zbound]])
     nx = torch.LongTensor(
         [(row[1] - row[0]) / row[2] for row in [xbound, ybound, zbound]]
     )
-    return dx, bx, nx
+    return dx, cx, bx, nx
 
 
 class BaseTransform(nn.Module):
@@ -37,6 +39,8 @@ class BaseTransform(nn.Module):
         depth_input='scalar',
         height_expand=False,
         add_depth_features=False,
+        use_bevpool='bevpoolv2',
+        use_depth=False,
     ) -> None:
         super().__init__()
         self.in_channels = in_channels
@@ -48,20 +52,25 @@ class BaseTransform(nn.Module):
         self.dbound = dbound
         self.use_points = use_points
         assert use_points in ['radar', 'lidar']
-        self.depth_input=depth_input
+        self.depth_input = depth_input
         assert depth_input in ['scalar', 'one-hot']
         self.height_expand = height_expand
         self.add_depth_features = add_depth_features
+        self.use_bevpool = use_bevpool
+        assert use_bevpool in ['bevpoolv1', 'bevpoolv2', 'matrixvt']
+        self.use_depth = use_depth
 
-        dx, bx, nx = gen_dx_bx(self.xbound, self.ybound, self.zbound)
+        dx, cx, bx, nx = gen_dx_bx(self.xbound, self.ybound, self.zbound)
         self.dx = nn.Parameter(dx, requires_grad=False)
+        self.cx = nn.Parameter(cx, requires_grad=False)
         self.bx = nn.Parameter(bx, requires_grad=False)
         self.nx = nn.Parameter(nx, requires_grad=False)
 
         self.C = out_channels
         self.frustum = self.create_frustum()
         self.D = self.frustum.shape[0]
-        # self.bev_anchors = self.create_bev_anchors()
+        if self.use_bevpool == 'matrixvt':
+            self.bev_anchors = self.create_bev_anchors()
         self.fp16_enabled = False
 
     @force_fp32()
@@ -199,6 +208,79 @@ class BaseTransform(nn.Module):
         final = torch.cat(x.unbind(dim=2), 1)
 
         return final
+
+    def voxel_pooling_v2(self, coor, depth, feat):
+        ranks_bev, ranks_depth, ranks_feat, \
+            interval_starts, interval_lengths = \
+            self.voxel_pooling_prepare_v2(coor)
+        if ranks_feat is None:
+            print('warning ---> no points within the predefined '
+                  'bev receptive field')
+            dummy = torch.zeros(size=[
+                feat.shape[0], feat.shape[2],
+                int(self.nx[2]),
+                int(self.nx[0]),
+                int(self.nx[1])
+            ]).to(feat)
+            dummy = torch.cat(dummy.unbind(dim=2), 1)
+            return dummy
+        feat = feat.permute(0, 1, 3, 4, 2)
+        bev_feat_shape = (depth.shape[0], int(self.nx[2]),
+                          int(self.nx[1]), int(self.nx[0]),
+                          feat.shape[-1])  # (B, Z, Y, X, C)
+        bev_feat = bev_pool_v2(depth, feat, ranks_depth, ranks_feat, ranks_bev,
+                               bev_feat_shape, interval_starts,
+                               interval_lengths)
+        bev_feat = torch.cat(bev_feat.unbind(dim=2), 1)
+        return bev_feat
+
+    def voxel_pooling_prepare_v2(self, coor):
+        B, N, D, H, W, _ = coor.shape
+        num_points = B * N * D * H * W
+        # record the index of selected points for acceleration purpose
+        ranks_depth = torch.range(
+            0, num_points - 1, dtype=torch.int, device=coor.device)
+        ranks_feat = torch.range(
+            0, num_points // D - 1, dtype=torch.int, device=coor.device)
+        ranks_feat = ranks_feat.reshape(B, N, 1, H, W)
+        ranks_feat = ranks_feat.expand(B, N, D, H, W).flatten()
+        # convert coordinate into the voxel space
+        coor = ((coor - self.cx.to(coor)) /
+                self.dx.to(coor))
+        coor = coor.long().view(num_points, 3)
+        batch_idx = torch.range(0, B - 1).reshape(B, 1). \
+            expand(B, num_points // B).reshape(num_points, 1).to(coor)
+        coor = torch.cat((coor, batch_idx), 1)
+
+        # filter out points that are outside box
+        kept = (coor[:, 0] >= 0) & (coor[:, 0] < self.nx[0]) & \
+               (coor[:, 1] >= 0) & (coor[:, 1] < self.nx[1]) & \
+               (coor[:, 2] >= 0) & (coor[:, 2] < self.nx[2])
+        if len(kept) == 0:
+            return None, None, None, None, None
+        coor, ranks_depth, ranks_feat = \
+            coor[kept], ranks_depth[kept], ranks_feat[kept]
+        # get tensors from the same voxel next to each other
+        ranks_bev = coor[:, 3] * (
+            self.nx[2] * self.nx[1] * self.nx[0])
+        ranks_bev += coor[:, 2] * (self.nx[1] * self.nx[0])
+        ranks_bev += coor[:, 1] * self.nx[0] + coor[:, 0]
+        order = ranks_bev.argsort()
+        ranks_bev, ranks_depth, ranks_feat = \
+            ranks_bev[order], ranks_depth[order], ranks_feat[order]
+
+        kept = torch.ones(
+            ranks_bev.shape[0], device=ranks_bev.device, dtype=torch.bool)
+        kept[1:] = ranks_bev[1:] != ranks_bev[:-1]
+        interval_starts = torch.where(kept)[0].int()
+        if len(interval_starts) == 0:
+            return None, None, None, None, None
+        interval_lengths = torch.zeros_like(interval_starts)
+        interval_lengths[:-1] = interval_starts[1:] - interval_starts[:-1]
+        interval_lengths[-1] = ranks_bev.shape[0] - interval_starts[-1]
+        return ranks_bev.int().contiguous(), ranks_depth.int().contiguous(
+        ), ranks_feat.int().contiguous(), interval_starts.int().contiguous(
+        ), interval_lengths.int().contiguous()
 
     @force_fp32()
     def forward(
@@ -471,17 +553,18 @@ class BaseDepthTransform(BaseTransform):
         }
         x = self.get_cam_feats(img, depth, mats_dict)
 
-        use_depth = False
         if type(x) == tuple:
-            x, depth = x 
-            use_depth = True
-        
-        x = self.bev_pool(geom, x)
+            x, depth = x
 
-        if use_depth:
-            return x, depth 
+        if self.use_bevpool == 'bevpoolv1':
+            x = self.bev_pool(geom, x)
+        elif self.use_bevpool == 'bevpoolv2':
+            x = self.voxel_pooling_v2(geom, depth, x)
+        elif self.use_bevpool == 'matrixvt':
+            x = self.reduce_and_project(x, depth, geom, mats_dict)
+
+        if self.use_depth:
+            return x, depth
         else:
             return x
-        # x = self.reduce_and_project(x, depth, geom, mats_dict)
-        # return x
 

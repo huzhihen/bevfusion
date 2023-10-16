@@ -84,6 +84,14 @@ if __name__ == "__main__":
                 ],
             ),
             make_cuda_ext(
+                name="bev_pool_v2_ext",
+                module="mmdet3d.ops.bev_pool_v2",
+                sources=[
+                    "src/bev_pool.cpp",
+                    "src/bev_pool_cuda.cu",
+                ],
+            ),
+            make_cuda_ext(
                 name="iou3d_cuda",
                 module="mmdet3d.ops.iou3d",
                 sources=[

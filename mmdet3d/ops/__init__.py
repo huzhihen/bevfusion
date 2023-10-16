@@ -22,6 +22,7 @@ from .knn import knn
 from .norm import NaiveSyncBatchNorm1d, NaiveSyncBatchNorm2d
 from .paconv import PAConv, PAConvCUDA, assign_score_withk
 from .bev_pool import *
+from .bev_pool_v2 import *
 from .pointnet_modules import (
     PAConvCUDASAModule,
     PAConvCUDASAModuleMSG,
@@ -90,5 +91,6 @@ __all__ = [
     "PAConvCUDASAModule",
     "PAConvCUDASAModuleMSG",
     "bev_pool",
+    "bev_pool_v2",
     "feature_decorator",
 ]
