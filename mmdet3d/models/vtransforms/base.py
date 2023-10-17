@@ -40,7 +40,7 @@ class BaseTransform(nn.Module):
         height_expand=False,
         add_depth_features=False,
         use_bevpool='bevpoolv2',
-        use_depth=False,
+        use_depth=True,
     ) -> None:
         super().__init__()
         self.in_channels = in_channels
@@ -532,6 +532,7 @@ class BaseDepthTransform(BaseTransform):
             output_list.append(output)
         edge = torch.cat(output_list, dim=2)  # [B, N, 4, 256, 704]
         sematic = kwargs['gt_sematic'].unsqueeze(2)  # [B, N, 1, 256, 704]
+        depth = torch.cat([depth, edge, sematic], dim=2)
 
         extra_rots = lidar_aug_matrix[..., :3, :3]
         extra_trans = lidar_aug_matrix[..., :3, 3]
