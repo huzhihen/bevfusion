@@ -40,7 +40,7 @@ class BaseTransform(nn.Module):
         height_expand=False,
         add_depth_features=False,
         use_bevpool='bevpoolv2',
-        use_depth=True,
+        use_depth=False,
     ) -> None:
         super().__init__()
         self.in_channels = in_channels
@@ -561,6 +561,8 @@ class BaseDepthTransform(BaseTransform):
             x = self.bev_pool(geom, x)
         elif self.use_bevpool == 'bevpoolv2':
             x = self.voxel_pooling_v2(geom, depth, x)
+            B, N, D, H, W = depth.shape
+            depth = depth.view(B * N, D, H, W)
         elif self.use_bevpool == 'matrixvt':
             x = self.reduce_and_project(x, depth, geom, mats_dict)
 

@@ -368,9 +368,8 @@ class DepthLSSTransform(BaseDepthTransform):
 
     @force_fp32()
     def get_depth_loss(self, depth_labels, depth_preds, loss_depth_weight=3.0):
-        B, N, C, H, W = depth_preds.shape
         depth_labels = self.get_downsampled_gt_depth(depth_labels)
-        depth_preds = depth_preds.view(B * N, C, H, W).permute(0, 2, 3, 1).contiguous().view(-1, self.D)
+        depth_preds = depth_preds.permute(0, 2, 3, 1).contiguous().view(-1, self.D)
         fg_mask = torch.max(depth_labels, dim=1).values > 0.0
         depth_labels = depth_labels[fg_mask]
         depth_preds = depth_preds[fg_mask]
@@ -412,9 +411,9 @@ class DepthLSSTransform(BaseDepthTransform):
         return x, depth
 
     def forward(self, *args, **kwargs):
-        # x = super().forward(*args, **kwargs)
-        # x = self.downsample(x)
-        # return x
         x = super().forward(*args, **kwargs)
-        final_x = self.downsample(x[0]), x[1]
-        return final_x
+        x = self.downsample(x)
+        return x
+        # x = super().forward(*args, **kwargs)
+        # final_x = self.downsample(x[0]), x[1]
+        # return final_x
