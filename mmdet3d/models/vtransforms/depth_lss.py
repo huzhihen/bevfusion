@@ -218,27 +218,26 @@ class DepthNet(nn.Module):
         self.depth_se = SELayer(mid_channels)
         self.context_mlp = Mlp(27, mid_channels, mid_channels)
         self.context_se = SELayer(mid_channels)
-        self.depth_conv = nn.Conv2d(mid_channels, depth_channels, kernel_size=1, stride=1, padding=0)
-        # self.depth_conv = nn.Sequential(
-        #     BasicBlock(mid_channels, mid_channels),
-        #     BasicBlock(mid_channels, mid_channels),
-        #     BasicBlock(mid_channels, mid_channels),
-        #     ASPP(mid_channels, mid_channels),
-        #     build_conv_layer(cfg=dict(
-        #         type='DCN',
-        #         in_channels=mid_channels,
-        #         out_channels=mid_channels,
-        #         kernel_size=3,
-        #         padding=1,
-        #         groups=4,
-        #         im2col_step=128,
-        #     )),
-        #     nn.Conv2d(mid_channels,
-        #               depth_channels,
-        #               kernel_size=1,
-        #               stride=1,
-        #               padding=0),
-        # )
+        self.depth_conv = nn.Sequential(
+            BasicBlock(mid_channels, mid_channels),
+            BasicBlock(mid_channels, mid_channels),
+            BasicBlock(mid_channels, mid_channels),
+            ASPP(mid_channels, mid_channels),
+            build_conv_layer(cfg=dict(
+                type='DCN',
+                in_channels=mid_channels,
+                out_channels=mid_channels,
+                kernel_size=3,
+                padding=1,
+                groups=4,
+                im2col_step=128,
+            )),
+            nn.Conv2d(mid_channels,
+                      depth_channels,
+                      kernel_size=1,
+                      stride=1,
+                      padding=0),
+        )
 
     def forward(self, x, mats_dict):
         batch_size, num_cams, _, _ = mats_dict['sensor2ego_mats'].shape
@@ -369,8 +368,9 @@ class DepthLSSTransform(BaseDepthTransform):
 
     @force_fp32()
     def get_depth_loss(self, depth_labels, depth_preds, loss_depth_weight=3.0):
+        B, N, C, H, W = depth_preds.shape
         depth_labels = self.get_downsampled_gt_depth(depth_labels)
-        depth_preds = depth_preds.permute(0, 2, 3, 1).contiguous().view(-1, self.D)
+        depth_preds = depth_preds.view(B * N, C, H, W).permute(0, 2, 3, 1).contiguous().view(-1, self.D)
         fg_mask = torch.max(depth_labels, dim=1).values > 0.0
         depth_labels = depth_labels[fg_mask]
         depth_preds = depth_preds[fg_mask]
@@ -412,9 +412,9 @@ class DepthLSSTransform(BaseDepthTransform):
         return x, depth
 
     def forward(self, *args, **kwargs):
-        x = super().forward(*args, **kwargs)
-        x = self.downsample(x)
-        return x
         # x = super().forward(*args, **kwargs)
-        # final_x = self.downsample(x[0]), x[1]
-        # return final_x
+        # x = self.downsample(x)
+        # return x
+        x = super().forward(*args, **kwargs)
+        final_x = self.downsample(x[0]), x[1]
+        return final_x
