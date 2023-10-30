@@ -93,8 +93,8 @@ class BEVFusion(Base3DFusionModel):
                     self.loss_scale[name] = 1.0
 
         # If the camera's vtransform is a BEVDepth version, then we're using depth loss. 
-        self.use_depth_loss = ((encoders.get('camera', {}) or {}).get('vtransform', {}) or {}).get('type', '') in ['BEVDepth', 'AwareBEVDepth', 'DBEVDepth', 'AwareDBEVDepth']
-
+        # self.use_depth_loss = ((encoders.get('camera', {}) or {}).get('vtransform', {}) or {}).get('type', '') in ['BEVDepth', 'AwareBEVDepth', 'DBEVDepth', 'AwareDBEVDepth']
+        self.use_depth_loss = True
 
         self.init_weights()
 
@@ -117,7 +117,7 @@ class BEVFusion(Base3DFusionModel):
         lidar_aug_matrix,
         img_metas,
         gt_depths=None,
-        gt_sematic=None,
+        gt_semantics=None,
     ) -> torch.Tensor:
         B, N, C, H, W = x.size()
         x = x.view(B * N, C, H, W)
@@ -146,7 +146,7 @@ class BEVFusion(Base3DFusionModel):
             img_metas,
             depth_loss=self.use_depth_loss, 
             gt_depths=gt_depths,
-            gt_sematic=gt_sematic,
+            gt_semantics=gt_semantics,
         )
         return x
     
@@ -243,7 +243,7 @@ class BEVFusion(Base3DFusionModel):
         lidar_aug_matrix,
         metas,
         depths,
-        sematic,
+        semantics,
         radar=None,
         gt_masks_bev=None,
         gt_bboxes_3d=None,
@@ -266,7 +266,7 @@ class BEVFusion(Base3DFusionModel):
                 lidar_aug_matrix,
                 metas,
                 depths,
-                sematic,
+                semantics,
                 radar,
                 gt_masks_bev,
                 gt_bboxes_3d,
@@ -290,7 +290,7 @@ class BEVFusion(Base3DFusionModel):
         lidar_aug_matrix,
         metas,
         depths=None,
-        sematic=None,
+        semantics=None,
         radar=None,
         gt_masks_bev=None,
         gt_bboxes_3d=None,
@@ -317,10 +317,10 @@ class BEVFusion(Base3DFusionModel):
                     lidar_aug_matrix,
                     metas,
                     gt_depths=depths,
-                    gt_sematic=sematic,
+                    gt_semantics=semantics,
                 )
                 if self.use_depth_loss:
-                    feature, auxiliary_losses['depth'] = feature[0], feature[-1]
+                    feature, auxiliary_losses['depth'], auxiliary_losses['semantic'] = feature[0], feature[-2], feature[-1]
             elif sensor == "lidar":
                 feature = self.extract_features(points, sensor)
             elif sensor == "radar":
@@ -362,7 +362,8 @@ class BEVFusion(Base3DFusionModel):
                         outputs[f"stats/{type}/{name}"] = val
             if self.use_depth_loss:
                 if 'depth' in auxiliary_losses:
-                    outputs["loss/depth"] = self.encoders["camera"]["vtransform"].get_depth_loss(depths, auxiliary_losses['depth'])
+                    outputs["loss/depth"], outputs["loss/semantic"] = self.encoders["camera"]["vtransform"].get_depth_loss(
+                        depths, auxiliary_losses['depth'], semantics, auxiliary_losses['semantic'])
                 else:
                     raise ValueError('Use depth loss is true, but depth loss not found')
             return outputs

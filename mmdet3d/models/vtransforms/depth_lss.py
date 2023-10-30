@@ -207,17 +207,17 @@ class DepthNet(nn.Module):
     def __init__(self, in_channels, mid_channels, context_channels,
                  depth_channels):
         super(DepthNet, self).__init__()
+        self.bn = nn.BatchNorm1d(27)
         self.reduce_conv = nn.Sequential(
             nn.Conv2d(in_channels, mid_channels, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(mid_channels),
             nn.ReLU(inplace=True),
         )
-        self.context_conv = nn.Conv2d(mid_channels, context_channels, kernel_size=1, stride=1, padding=0)
-        self.bn = nn.BatchNorm1d(27)
-        self.depth_mlp = Mlp(27, mid_channels, mid_channels)
-        self.depth_se = SELayer(mid_channels)
         self.context_mlp = Mlp(27, mid_channels, mid_channels)
         self.context_se = SELayer(mid_channels)
+        self.context_conv = nn.Conv2d(mid_channels, context_channels, kernel_size=1, stride=1, padding=0)
+        self.depth_mlp = Mlp(27, mid_channels, mid_channels)
+        self.depth_se = SELayer(mid_channels)
         self.depth_conv = nn.Sequential(
             BasicBlock(mid_channels, mid_channels),
             BasicBlock(mid_channels, mid_channels),
@@ -233,7 +233,7 @@ class DepthNet(nn.Module):
                 im2col_step=128,
             )),
             nn.Conv2d(mid_channels,
-                      depth_channels,
+                      depth_channels + context_channels,
                       kernel_size=1,
                       stride=1,
                       padding=0),
@@ -309,16 +309,17 @@ class DepthLSSTransform(BaseDepthTransform):
             nn.BatchNorm2d(64),
             nn.ReLU(True),
         )
-        # self.depthnet = nn.Sequential(
-        #     nn.Conv2d(in_channels + 64, in_channels, 3, padding=1),
-        #     nn.BatchNorm2d(in_channels),
-        #     nn.ReLU(True),
-        #     nn.Conv2d(in_channels, in_channels, 3, padding=1),
-        #     nn.BatchNorm2d(in_channels),
-        #     nn.ReLU(True),
-        #     nn.Conv2d(in_channels, self.D + self.C, 1),
-        # )
         self.depthnet = DepthNet(in_channels + 64, in_channels, self.C, self.D)
+        self.sematicnet = nn.Sequential(
+            nn.Conv2d(self.C, 2, 3, padding=1),
+            nn.BatchNorm2d(2),
+            nn.ReLU(True)
+        )
+        self.fusionnet = nn.Sequential(
+            nn.Conv2d(self.C * 2, self.C, 3, padding=1),
+            nn.BatchNorm2d(self.C),
+            nn.ReLU(True)
+        )
         if downsample > 1:
             assert downsample == 2, downsample
             self.downsample = nn.Sequential(
@@ -346,13 +347,7 @@ class DepthLSSTransform(BaseDepthTransform):
             self.horiconv = HoriConv(self.C, 512, self.C)
             self.depth_reducer = DepthReducer(self.C, self.C)
 
-    def get_downsampled_gt_depth(self, gt_depths, downsample=8):
-        """
-        Input:
-            gt_depths: [B, N, H, W]
-        Output:
-            gt_depths: [B*N*h*w, d]
-        """
+    def get_downsampled_gt_depth(self, gt_depths, gt_semantics, downsample=8):
         B, N, H, W = gt_depths.shape
         gt_depths = gt_depths.view(B * N, H // downsample, downsample, W // downsample, downsample, 1)
         gt_depths = gt_depths.permute(0, 1, 3, 5, 2, 4).contiguous()
@@ -360,26 +355,50 @@ class DepthLSSTransform(BaseDepthTransform):
         gt_depths_tmp = torch.where(gt_depths == 0.0, 1e5 * torch.ones_like(gt_depths), gt_depths)
         gt_depths = torch.min(gt_depths_tmp, dim=-1).values
         gt_depths = gt_depths.view(B * N, H // downsample, W // downsample)
-
-        gt_depths = (gt_depths - (1 - 0.5)) / 0.5
+        gt_depths = (gt_depths - (self.dbound[0] - self.dbound[2])) / self.dbound[2]
         gt_depths = torch.where((gt_depths < self.D + 1) & (gt_depths >= 0.0), gt_depths, torch.zeros_like(gt_depths))
-        gt_depths = F.one_hot(gt_depths.long(), num_classes=self.D + 1).view(-1, self.D + 1)[:, 1:]
-        return gt_depths.float()
+        gt_depths = F.one_hot(gt_depths.long(), num_classes=self.D + 1).view(-1, self.D + 1)[:, 1:].float()
+
+        B, N, H, W = gt_semantics.shape
+        gt_semantics = gt_semantics.view(B * N, H // downsample, downsample, W // downsample, downsample, 1)
+        gt_semantics = gt_semantics.permute(0, 1, 3, 5, 2, 4).contiguous()
+        gt_semantics = gt_semantics.view(-1, downsample * downsample)
+        gt_semantics = torch.max(gt_semantics, dim=-1).values
+        gt_semantics = gt_semantics.view(B * N, H // downsample, W // downsample)
+        gt_semantics = F.one_hot(gt_semantics.long(), num_classes=2).view(-1, 2).float()
+        return gt_depths, gt_semantics
 
     @force_fp32()
-    def get_depth_loss(self, depth_labels, depth_preds, loss_depth_weight=3.0):
-        depth_labels = self.get_downsampled_gt_depth(depth_labels)
+    def get_depth_loss(self, depth_labels, depth_preds, semantic_labels, semantic_preds, loss_depth_weight=3.0, loss_semantic_weight=25.0):
+        depth_labels, semantic_labels = self.get_downsampled_gt_depth(depth_labels, semantic_labels)
         depth_preds = depth_preds.permute(0, 2, 3, 1).contiguous().view(-1, self.D)
-        fg_mask = torch.max(depth_labels, dim=1).values > 0.0
-        depth_labels = depth_labels[fg_mask]
-        depth_preds = depth_preds[fg_mask]
+        depth_mask = torch.max(depth_labels, dim=1).values > 0.0
+        depth_labels = depth_labels[depth_mask]
+        depth_preds = depth_preds[depth_mask]
+
+        semantic_preds = semantic_preds.permute(0, 2, 3, 1).contiguous().view(-1, 2)
+        semantic_weight = torch.zeros_like(semantic_labels[:, 1:2])
+        semantic_weight = torch.fill_(semantic_weight, 0.1)
+        semantic_weight[semantic_labels[:, 1] > 0] = 0.9
+        semantic_labels = semantic_labels[depth_mask]
+        semantic_preds = semantic_preds[depth_mask]
+        semantic_weight = semantic_weight[depth_mask]
         with autocast(enabled=False):
             depth_loss = F.binary_cross_entropy(
                 depth_preds,
                 depth_labels,
                 reduction='none',
-            ).sum() / max(1.0, fg_mask.sum())
-        return depth_loss * loss_depth_weight
+            ).sum() / max(1.0, depth_mask.sum())
+
+            pred = semantic_preds
+            target = semantic_labels
+            alpha = 0.25
+            gamma = 2
+            pt = (1 - pred) * target + pred * (1 - target)
+            focal_weight = (alpha * target + (1 - alpha) * (1 - target)) * pt.pow(gamma)
+            semantic_loss = F.binary_cross_entropy(pred, target, reduction='none') * focal_weight
+            semantic_loss = semantic_loss.sum() / max(1, len(semantic_loss))
+        return depth_loss * loss_depth_weight, semantic_loss * loss_semantic_weight
 
     @force_fp32()
     def get_cam_feats(self, x, d, mats_dict):
@@ -400,7 +419,10 @@ class DepthLSSTransform(BaseDepthTransform):
 
         elif self.use_bevpool == 'bevpoolv2':
             depth = x[:, : self.D].softmax(dim=1)
-            x = x[:, self.D: (self.D + self.C)]
+            sematic = x[:, self.D: (self.D + self.C)]
+            x = x[:, (self.D + self.C): (self.D + self.C * 2)]
+            x = self.fusionnet(torch.cat([sematic, x], dim=1))
+            sematic = self.sematicnet(sematic).softmax(dim=1)
             depth = depth.view(B, N, self.D, fH, fW)
             x = x.view(B, N, self.C, fH, fW)
 
@@ -408,12 +430,14 @@ class DepthLSSTransform(BaseDepthTransform):
             depth = x[:, : self.D].softmax(dim=1)
             x = x[:, self.D: (self.D + self.C)]
 
-        return x, depth
+        return x, depth, sematic
 
     def forward(self, *args, **kwargs):
-        x = super().forward(*args, **kwargs)
-        x = self.downsample(x)
-        return x
-        # x = super().forward(*args, **kwargs)
-        # final_x = self.downsample(x[0]), x[1]
-        # return final_x
+        if self.use_depth:
+            x = super().forward(*args, **kwargs)
+            final_x = self.downsample(x[0]), x[1], x[2]
+            return final_x
+        else:
+            x = super().forward(*args, **kwargs)
+            x = self.downsample(x)
+            return x

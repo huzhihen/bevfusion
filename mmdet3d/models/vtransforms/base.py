@@ -40,7 +40,7 @@ class BaseTransform(nn.Module):
         height_expand=False,
         add_depth_features=False,
         use_bevpool='bevpoolv2',
-        use_depth=False,
+        use_depth=True,
     ) -> None:
         super().__init__()
         self.in_channels = in_channels
@@ -531,7 +531,23 @@ class BaseDepthTransform(BaseTransform):
             output = output * output_mask
             output_list.append(output)
         edge = torch.cat(output_list, dim=2)  # [B, N, 4, 256, 704]
-        sematic = kwargs['gt_sematic'].unsqueeze(2)  # [B, N, 1, 256, 704]
+        sematic = kwargs['gt_semantics'].unsqueeze(2)  # [B, N, 1, 256, 704]
+
+        # visualization
+        # from torchvision.utils import save_image
+        # depth_tmp = depth.reshape(B * N, 1, H, W).float()
+        # edge_tmp = edge.reshape(B * N, 4, H, W).float()
+        # sematic_tmp = sematic.reshape(B * N, 1, H, W).float()
+        # save_image(depth_tmp, 'depth_all.png')
+        # save_image(edge_tmp, 'edge_all.png')
+        # save_image(sematic_tmp, 'sematictic_all.png')
+        # save_image(depth_tmp[0], 'depth.png')
+        # save_image(edge_tmp[0][0], 'edge1.png')
+        # save_image(edge_tmp[0][1], 'edge2.png')
+        # save_image(edge_tmp[0][2], 'edge3.png')
+        # save_image(edge_tmp[0][3], 'edge4.png')
+        # save_image(sematic_tmp[0], 'sematictic.png')
+
         depth = torch.cat([depth, edge, sematic], dim=2)
 
         extra_rots = lidar_aug_matrix[..., :3, :3]
@@ -555,7 +571,7 @@ class BaseDepthTransform(BaseTransform):
         x = self.get_cam_feats(img, depth, mats_dict)
 
         if type(x) == tuple:
-            x, depth = x
+            x, depth, sematic = x
 
         if self.use_bevpool == 'bevpoolv1':
             x = self.bev_pool(geom, x)
@@ -567,7 +583,7 @@ class BaseDepthTransform(BaseTransform):
             x = self.reduce_and_project(x, depth, geom, mats_dict)
 
         if self.use_depth:
-            return x, depth
+            return x, depth, sematic
         else:
             return x
 
