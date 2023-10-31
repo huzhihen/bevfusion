@@ -233,7 +233,7 @@ class DepthNet(nn.Module):
                 im2col_step=128,
             )),
             nn.Conv2d(mid_channels,
-                      depth_channels + context_channels,
+                      depth_channels + 2,
                       kernel_size=1,
                       stride=1,
                       padding=0),
@@ -310,16 +310,6 @@ class DepthLSSTransform(BaseDepthTransform):
             nn.ReLU(True),
         )
         self.depthnet = DepthNet(in_channels + 64, in_channels, self.C, self.D)
-        self.sematicnet = nn.Sequential(
-            nn.Conv2d(self.C, 2, 3, padding=1),
-            nn.BatchNorm2d(2),
-            nn.ReLU(True)
-        )
-        self.fusionnet = nn.Sequential(
-            nn.Conv2d(self.C * 2, self.C, 3, padding=1),
-            nn.BatchNorm2d(self.C),
-            nn.ReLU(True)
-        )
         if downsample > 1:
             assert downsample == 2, downsample
             self.downsample = nn.Sequential(
@@ -419,10 +409,8 @@ class DepthLSSTransform(BaseDepthTransform):
 
         elif self.use_bevpool == 'bevpoolv2':
             depth = x[:, : self.D].softmax(dim=1)
-            sematic = x[:, self.D: (self.D + self.C)]
-            x = x[:, (self.D + self.C): (self.D + self.C * 2)]
-            x = self.fusionnet(torch.cat([sematic, x], dim=1))
-            sematic = self.sematicnet(sematic).softmax(dim=1)
+            sematic = x[:, self.D: (self.D + 2)].softmax(dim=1)
+            x = x[:, (self.D + 2): (self.D + self.C + 2)]
             depth = depth.view(B, N, self.D, fH, fW)
             x = x.view(B, N, self.C, fH, fW)
 
