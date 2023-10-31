@@ -40,7 +40,7 @@ class BaseTransform(nn.Module):
         height_expand=False,
         add_depth_features=False,
         use_bevpool='bevpoolv2',
-        use_depth=True,
+        use_depth=False,
     ) -> None:
         super().__init__()
         self.in_channels = in_channels
@@ -238,17 +238,17 @@ class BaseTransform(nn.Module):
         B, N, D, H, W, _ = coor.shape
         num_points = B * N * D * H * W
         # record the index of selected points for acceleration purpose
-        ranks_depth = torch.range(
-            0, num_points - 1, dtype=torch.int, device=coor.device)
-        ranks_feat = torch.range(
-            0, num_points // D - 1, dtype=torch.int, device=coor.device)
+        ranks_depth = torch.arange(
+            0, num_points, dtype=torch.int, device=coor.device)
+        ranks_feat = torch.arange(
+            0, num_points // D, dtype=torch.int, device=coor.device)
         ranks_feat = ranks_feat.reshape(B, N, 1, H, W)
         ranks_feat = ranks_feat.expand(B, N, D, H, W).flatten()
         # convert coordinate into the voxel space
         coor = ((coor - self.cx.to(coor)) /
                 self.dx.to(coor))
         coor = coor.long().view(num_points, 3)
-        batch_idx = torch.range(0, B - 1).reshape(B, 1). \
+        batch_idx = torch.arange(0, B).reshape(B, 1). \
             expand(B, num_points // B).reshape(num_points, 1).to(coor)
         coor = torch.cat((coor, batch_idx), 1)
 
@@ -531,24 +531,6 @@ class BaseDepthTransform(BaseTransform):
             output = output * output_mask
             output_list.append(output)
         edge = torch.cat(output_list, dim=2)  # [B, N, 4, 256, 704]
-        sematic = kwargs['gt_semantics'].unsqueeze(2)  # [B, N, 1, 256, 704]
-
-        # visualization
-        # from torchvision.utils import save_image
-        # depth_tmp = depth.reshape(B * N, 1, H, W).float()
-        # edge_tmp = edge.reshape(B * N, 4, H, W).float()
-        # sematic_tmp = sematic.reshape(B * N, 1, H, W).float()
-        # save_image(depth_tmp, 'depth_all.png')
-        # save_image(edge_tmp, 'edge_all.png')
-        # save_image(sematic_tmp, 'sematictic_all.png')
-        # save_image(depth_tmp[0], 'depth.png')
-        # save_image(edge_tmp[0][0], 'edge1.png')
-        # save_image(edge_tmp[0][1], 'edge2.png')
-        # save_image(edge_tmp[0][2], 'edge3.png')
-        # save_image(edge_tmp[0][3], 'edge4.png')
-        # save_image(sematic_tmp[0], 'sematictic.png')
-
-        depth = torch.cat([depth, edge, sematic], dim=2)
 
         extra_rots = lidar_aug_matrix[..., :3, :3]
         extra_trans = lidar_aug_matrix[..., :3, 3]
@@ -568,10 +550,10 @@ class BaseDepthTransform(BaseTransform):
             'bda_mat': lidar_aug_matrix,
             'sensor2ego_mats': sensor2ego, 
         }
-        x = self.get_cam_feats(img, depth, mats_dict)
+        x = self.get_cam_feats(img, depth, edge, mats_dict)
 
         if type(x) == tuple:
-            x, depth, sematic = x
+            x, depth = x
 
         if self.use_bevpool == 'bevpoolv1':
             x = self.bev_pool(geom, x)
@@ -583,7 +565,7 @@ class BaseDepthTransform(BaseTransform):
             x = self.reduce_and_project(x, depth, geom, mats_dict)
 
         if self.use_depth:
-            return x, depth, sematic
+            return x, depth
         else:
             return x
 

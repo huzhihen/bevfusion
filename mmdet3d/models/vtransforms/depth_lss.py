@@ -233,7 +233,7 @@ class DepthNet(nn.Module):
                 im2col_step=128,
             )),
             nn.Conv2d(mid_channels,
-                      depth_channels + 2,
+                      depth_channels,
                       kernel_size=1,
                       stride=1,
                       padding=0),
@@ -299,7 +299,18 @@ class DepthLSSTransform(BaseDepthTransform):
             dbound=dbound,
         )
         self.dtransform = nn.Sequential(
-            nn.Conv2d(6, 8, 1),
+            nn.Conv2d(1, 8, 1),
+            nn.BatchNorm2d(8),
+            nn.ReLU(True),
+            nn.Conv2d(8, 32, 5, stride=4, padding=2),
+            nn.BatchNorm2d(32),
+            nn.ReLU(True),
+            nn.Conv2d(32, 64, 5, stride=2, padding=2),
+            nn.BatchNorm2d(64),
+            nn.ReLU(True),
+        )
+        self.etransform = nn.Sequential(
+            nn.Conv2d(4, 8, 1),
             nn.BatchNorm2d(8),
             nn.ReLU(True),
             nn.Conv2d(8, 32, 5, stride=4, padding=2),
@@ -310,6 +321,16 @@ class DepthLSSTransform(BaseDepthTransform):
             nn.ReLU(True),
         )
         self.depthnet = DepthNet(in_channels + 64, in_channels, self.C, self.D)
+        self.edgenet = nn.Sequential(
+            nn.Conv2d(in_channels + 64, in_channels, 3, padding=1),
+            nn.BatchNorm2d(in_channels),
+            nn.ReLU(True),
+            nn.Conv2d(in_channels, in_channels, 3, padding=1),
+            nn.BatchNorm2d(in_channels),
+            nn.ReLU(True),
+            nn.Conv2d(in_channels, self.C, 1),
+        )
+        self.attention = nn.Conv2d(self.C, 1, 1)
         if downsample > 1:
             assert downsample == 2, downsample
             self.downsample = nn.Sequential(
@@ -337,7 +358,7 @@ class DepthLSSTransform(BaseDepthTransform):
             self.horiconv = HoriConv(self.C, 512, self.C)
             self.depth_reducer = DepthReducer(self.C, self.C)
 
-    def get_downsampled_gt_depth(self, gt_depths, gt_semantics, downsample=8):
+    def get_downsampled_gt_depth(self, gt_depths, downsample=8):
         B, N, H, W = gt_depths.shape
         gt_depths = gt_depths.view(B * N, H // downsample, downsample, W // downsample, downsample, 1)
         gt_depths = gt_depths.permute(0, 1, 3, 5, 2, 4).contiguous()
@@ -348,82 +369,66 @@ class DepthLSSTransform(BaseDepthTransform):
         gt_depths = (gt_depths - (self.dbound[0] - self.dbound[2])) / self.dbound[2]
         gt_depths = torch.where((gt_depths < self.D + 1) & (gt_depths >= 0.0), gt_depths, torch.zeros_like(gt_depths))
         gt_depths = F.one_hot(gt_depths.long(), num_classes=self.D + 1).view(-1, self.D + 1)[:, 1:].float()
-
-        B, N, H, W = gt_semantics.shape
-        gt_semantics = gt_semantics.view(B * N, H // downsample, downsample, W // downsample, downsample, 1)
-        gt_semantics = gt_semantics.permute(0, 1, 3, 5, 2, 4).contiguous()
-        gt_semantics = gt_semantics.view(-1, downsample * downsample)
-        gt_semantics = torch.max(gt_semantics, dim=-1).values
-        gt_semantics = gt_semantics.view(B * N, H // downsample, W // downsample)
-        gt_semantics = F.one_hot(gt_semantics.long(), num_classes=2).view(-1, 2).float()
-        return gt_depths, gt_semantics
+        return gt_depths
 
     @force_fp32()
-    def get_depth_loss(self, depth_labels, depth_preds, semantic_labels, semantic_preds, loss_depth_weight=3.0, loss_semantic_weight=25.0):
-        depth_labels, semantic_labels = self.get_downsampled_gt_depth(depth_labels, semantic_labels)
+    def get_depth_loss(self, depth_labels, depth_preds, loss_depth_weight=3.0):
+        depth_labels = self.get_downsampled_gt_depth(depth_labels)
         depth_preds = depth_preds.permute(0, 2, 3, 1).contiguous().view(-1, self.D)
         depth_mask = torch.max(depth_labels, dim=1).values > 0.0
         depth_labels = depth_labels[depth_mask]
         depth_preds = depth_preds[depth_mask]
 
-        semantic_preds = semantic_preds.permute(0, 2, 3, 1).contiguous().view(-1, 2)
-        semantic_weight = torch.zeros_like(semantic_labels[:, 1:2])
-        semantic_weight = torch.fill_(semantic_weight, 0.1)
-        semantic_weight[semantic_labels[:, 1] > 0] = 0.9
-        semantic_labels = semantic_labels[depth_mask]
-        semantic_preds = semantic_preds[depth_mask]
-        semantic_weight = semantic_weight[depth_mask]
         with autocast(enabled=False):
             depth_loss = F.binary_cross_entropy(
                 depth_preds,
                 depth_labels,
                 reduction='none',
             ).sum() / max(1.0, depth_mask.sum())
-
-            pred = semantic_preds
-            target = semantic_labels
-            alpha = 0.25
-            gamma = 2
-            pt = (1 - pred) * target + pred * (1 - target)
-            focal_weight = (alpha * target + (1 - alpha) * (1 - target)) * pt.pow(gamma)
-            semantic_loss = F.binary_cross_entropy(pred, target, reduction='none') * focal_weight
-            semantic_loss = semantic_loss.sum() / max(1, len(semantic_loss))
-        return depth_loss * loss_depth_weight, semantic_loss * loss_semantic_weight
+        return depth_loss * loss_depth_weight
 
     @force_fp32()
-    def get_cam_feats(self, x, d, mats_dict):
+    def get_cam_feats(self, x, d, e, mats_dict):
         B, N, C, fH, fW = x.shape
 
         d = d.view(B * N, *d.shape[2:])
+        e = e.view(B * N, *e.shape[2:])
         x = x.view(B * N, C, fH, fW)
 
         d = self.dtransform(d)
-        x = torch.cat([d, x], dim=1)
-        x = self.depthnet(x, mats_dict)
+        x1 = torch.cat([d, x], dim=1)
+        x1 = self.depthnet(x1, mats_dict)
+
+        e = self.etransform(e)
+        x2 = torch.cat([e, x], dim=1)
+        x2 = self.edgenet(x2)
 
         if self.use_bevpool == 'bevpoolv1':
-            depth = x[:, : self.D].softmax(dim=1)
-            x = depth.unsqueeze(1) * x[:, self.D: (self.D + self.C)].unsqueeze(2)
-            x = x.view(B, N, self.C, self.D, fH, fW)
-            x = x.permute(0, 1, 3, 4, 5, 2)
+            depth = x1[:, : self.D].softmax(dim=1)
+            context = x1[:, self.D: (self.D + self.C)] + x2
+            context = context * self.attention(context)
+            context = depth.unsqueeze(1) * context.unsqueeze(2)
+            context = context.view(B, N, self.C, self.D, fH, fW)
+            context = context.permute(0, 1, 3, 4, 5, 2)
 
         elif self.use_bevpool == 'bevpoolv2':
-            depth = x[:, : self.D].softmax(dim=1)
-            sematic = x[:, self.D: (self.D + 2)].softmax(dim=1)
-            x = x[:, (self.D + 2): (self.D + self.C + 2)]
+            depth = x1[:, : self.D].softmax(dim=1)
+            context = x1[:, self.D: (self.D + self.C)] + x2
+            context = context * self.attention(context)
             depth = depth.view(B, N, self.D, fH, fW)
-            x = x.view(B, N, self.C, fH, fW)
+            context = context.view(B, N, self.C, fH, fW)
 
         elif self.use_bevpool == 'matrixvt':
-            depth = x[:, : self.D].softmax(dim=1)
-            x = x[:, self.D: (self.D + self.C)]
+            depth = x1[:, : self.D].softmax(dim=1)
+            context = x1[:, self.D: (self.D + self.C)] + x2
+            context = context * self.attention(context)
 
-        return x, depth, sematic
+        return context, depth
 
     def forward(self, *args, **kwargs):
         if self.use_depth:
             x = super().forward(*args, **kwargs)
-            final_x = self.downsample(x[0]), x[1], x[2]
+            final_x = self.downsample(x[0]), x[1]
             return final_x
         else:
             x = super().forward(*args, **kwargs)

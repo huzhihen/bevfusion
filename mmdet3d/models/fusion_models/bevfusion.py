@@ -94,7 +94,7 @@ class BEVFusion(Base3DFusionModel):
 
         # If the camera's vtransform is a BEVDepth version, then we're using depth loss. 
         # self.use_depth_loss = ((encoders.get('camera', {}) or {}).get('vtransform', {}) or {}).get('type', '') in ['BEVDepth', 'AwareBEVDepth', 'DBEVDepth', 'AwareDBEVDepth']
-        self.use_depth_loss = True
+        self.use_depth_loss = False
 
         self.init_weights()
 
@@ -320,7 +320,7 @@ class BEVFusion(Base3DFusionModel):
                     gt_semantics=semantics,
                 )
                 if self.use_depth_loss:
-                    feature, auxiliary_losses['depth'], auxiliary_losses['semantic'] = feature[0], feature[-2], feature[-1]
+                    feature, auxiliary_losses['depth'] = feature[0], feature[-1]
             elif sensor == "lidar":
                 feature = self.extract_features(points, sensor)
             elif sensor == "radar":
@@ -362,8 +362,8 @@ class BEVFusion(Base3DFusionModel):
                         outputs[f"stats/{type}/{name}"] = val
             if self.use_depth_loss:
                 if 'depth' in auxiliary_losses:
-                    outputs["loss/depth"], outputs["loss/semantic"] = self.encoders["camera"]["vtransform"].get_depth_loss(
-                        depths, auxiliary_losses['depth'], semantics, auxiliary_losses['semantic'])
+                    outputs["loss/depth"] = self.encoders["camera"]["vtransform"].get_depth_loss(
+                        depths, auxiliary_losses['depth'])
                 else:
                     raise ValueError('Use depth loss is true, but depth loss not found')
             return outputs
