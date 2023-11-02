@@ -328,12 +328,29 @@ class DepthLSSTransform(BaseDepthTransform):
             nn.Conv2d(in_channels, in_channels, 3, padding=1),
             nn.BatchNorm2d(in_channels),
             nn.ReLU(True),
-            nn.Conv2d(in_channels, self.C, 1),
+            nn.Conv2d(in_channels, self.D + self.C, 1),
         )
-        self.attention = nn.Conv2d(self.C, 1, 1)
         if downsample > 1:
             assert downsample == 2, downsample
-            self.downsample = nn.Sequential(
+            self.downsample1 = nn.Sequential(
+                nn.Conv2d(out_channels, out_channels, 3, padding=1, bias=False),
+                nn.BatchNorm2d(out_channels),
+                nn.ReLU(True),
+                nn.Conv2d(
+                    out_channels,
+                    out_channels,
+                    3,
+                    stride=downsample,
+                    padding=1,
+                    bias=False,
+                ),
+                nn.BatchNorm2d(out_channels),
+                nn.ReLU(True),
+                nn.Conv2d(out_channels, out_channels, 3, padding=1, bias=False),
+                nn.BatchNorm2d(out_channels),
+                nn.ReLU(True),
+            )
+            self.downsample2 = nn.Sequential(
                 nn.Conv2d(out_channels, out_channels, 3, padding=1, bias=False),
                 nn.BatchNorm2d(out_channels),
                 nn.ReLU(True),
@@ -353,6 +370,12 @@ class DepthLSSTransform(BaseDepthTransform):
             )
         else:
             self.downsample = nn.Identity()
+
+        self.fusion_conv = nn.Sequential(
+            nn.Conv2d(out_channels * 2, out_channels, kernel_size=3, stride=1, padding=1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(True)
+        )
 
         if self.use_bevpool == 'matrixvt':
             self.horiconv = HoriConv(self.C, 512, self.C)
@@ -403,34 +426,21 @@ class DepthLSSTransform(BaseDepthTransform):
         x2 = torch.cat([e, x], dim=1)
         x2 = self.edgenet(x2)
 
-        if self.use_bevpool == 'bevpoolv1':
-            depth = x1[:, : self.D].softmax(dim=1)
-            context = x1[:, self.D: (self.D + self.C)] + x2
-            context = context * self.attention(context)
-            context = depth.unsqueeze(1) * context.unsqueeze(2)
-            context = context.view(B, N, self.C, self.D, fH, fW)
-            context = context.permute(0, 1, 3, 4, 5, 2)
+        depth1 = x1[:, : self.D].softmax(dim=1)
+        depth2 = x2[:, : self.D].softmax(dim=1)
+        context = x1[:, self.D: (self.D + self.C)] + x2[:, self.D: (self.D + self.C)]
+        depth1 = depth1.view(B, N, self.D, fH, fW)
+        depth2 = depth2.view(B, N, self.D, fH, fW)
+        context = context.view(B, N, self.C, fH, fW)
 
-        elif self.use_bevpool == 'bevpoolv2':
-            depth = x1[:, : self.D].softmax(dim=1)
-            context = x1[:, self.D: (self.D + self.C)] + x2
-            context = context * self.attention(context)
-            depth = depth.view(B, N, self.D, fH, fW)
-            context = context.view(B, N, self.C, fH, fW)
-
-        elif self.use_bevpool == 'matrixvt':
-            depth = x1[:, : self.D].softmax(dim=1)
-            context = x1[:, self.D: (self.D + self.C)] + x2
-            context = context * self.attention(context)
-
-        return context, depth
+        return context, depth1, depth2
 
     def forward(self, *args, **kwargs):
         if self.use_depth:
             x = super().forward(*args, **kwargs)
-            final_x = self.downsample(x[0]), x[1]
+            final_x = self.fusion_conv(torch.cat([self.downsample1(x[0]), self.downsample2(x[1])], dim=1)), x[2]
             return final_x
         else:
             x = super().forward(*args, **kwargs)
-            x = self.downsample(x)
+            x = self.fusion_conv(torch.cat([self.downsample1(x[0]), self.downsample2(x[1])], dim=1))
             return x
