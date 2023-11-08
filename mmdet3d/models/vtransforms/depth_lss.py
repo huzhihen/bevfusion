@@ -15,79 +15,6 @@ from .base import BaseDepthTransform
 __all__ = ["DepthLSSTransform"]
 
 
-class HoriConv(nn.Module):
-
-    def __init__(self, in_channels, mid_channels, out_channels, cat_dim=0):
-        super().__init__()
-
-        self.merger = nn.Sequential(
-            nn.Conv2d(in_channels + cat_dim, in_channels, kernel_size=1, bias=True),
-            nn.Sigmoid(),
-            nn.Conv2d(in_channels, in_channels, kernel_size=1, bias=True),
-        )
-
-        self.reduce_conv = nn.Sequential(
-            nn.Conv1d(in_channels, mid_channels, kernel_size=3, stride=1, padding=1, bias=False),
-            nn.BatchNorm1d(mid_channels),
-            nn.ReLU(inplace=True),
-        )
-
-        self.conv1 = nn.Sequential(
-            nn.Conv1d(mid_channels, mid_channels, kernel_size=3, stride=1, padding=1, bias=False),
-            nn.BatchNorm1d(mid_channels),
-            nn.ReLU(inplace=True),
-            nn.Conv1d(mid_channels, mid_channels, kernel_size=3, stride=1, padding=1, bias=False),
-            nn.BatchNorm1d(mid_channels),
-            nn.ReLU(inplace=True),
-        )
-
-        self.conv2 = nn.Sequential(
-            nn.Conv1d(mid_channels, mid_channels, kernel_size=3, stride=1, padding=1, bias=False),
-            nn.BatchNorm1d(mid_channels),
-            nn.ReLU(inplace=True),
-            nn.Conv1d(mid_channels, mid_channels, kernel_size=3, stride=1, padding=1, bias=False),
-            nn.BatchNorm1d(mid_channels),
-            nn.ReLU(inplace=True),
-        )
-
-        self.out_conv = nn.Sequential(
-            nn.Conv1d(mid_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=True),
-            nn.BatchNorm1d(out_channels),
-            nn.ReLU(inplace=True),
-        )
-
-    @autocast(False)
-    def forward(self, x, pe=None):
-        if pe is not None:
-            x = self.merger(torch.cat([x, pe], 1))
-        else:
-            x = self.merger(x)
-        x = x.max(dim=2)[0]
-        x = self.reduce_conv(x)
-        x = self.conv1(x) + x
-        x = self.conv2(x) + x
-        x = self.out_conv(x)
-        return x
-
-
-class DepthReducer(nn.Module):
-
-    def __init__(self, img_channels, mid_channels):
-        super().__init__()
-        self.vertical_weighter = nn.Sequential(
-            nn.Conv2d(img_channels, mid_channels, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(mid_channels),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(mid_channels, 1, kernel_size=3, stride=1, padding=1),
-        )
-
-    @autocast(False)
-    def forward(self, feat, depth):
-        vert_weight = self.vertical_weighter(feat).softmax(dim=2)
-        depth = (depth * vert_weight).sum(dim=2)
-        return depth
-
-
 class _ASPPModule(nn.Module):
 
     def __init__(self, inplanes, planes, kernel_size, padding, dilation,
@@ -202,20 +129,31 @@ class SELayer(nn.Module):
         return x * self.gate(x_se)
 
 
-class DepthNet(nn.Module):
+class DepthEdgeNet(nn.Module):
 
     def __init__(self, in_channels, mid_channels, context_channels,
                  depth_channels):
-        super(DepthNet, self).__init__()
+        super(DepthEdgeNet, self).__init__()
         self.bn = nn.BatchNorm1d(27)
-        self.reduce_conv = nn.Sequential(
+        self.reduce_edge_conv = nn.Sequential(
             nn.Conv2d(in_channels, mid_channels, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(mid_channels),
             nn.ReLU(inplace=True),
         )
         self.context_mlp = Mlp(27, mid_channels, mid_channels)
         self.context_se = SELayer(mid_channels)
-        self.context_conv = nn.Conv2d(mid_channels, context_channels, kernel_size=1, stride=1, padding=0)
+        self.context_conv = nn.Sequential(
+            nn.Conv2d(mid_channels, mid_channels, 3, padding=1),
+            nn.BatchNorm2d(mid_channels),
+            nn.ReLU(True),
+            nn.Conv2d(mid_channels, context_channels, kernel_size=1, stride=1, padding=0)
+        )
+
+        self.reduce_depth_conv = nn.Sequential(
+            nn.Conv2d(in_channels, mid_channels, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(mid_channels),
+            nn.ReLU(inplace=True),
+        )
         self.depth_mlp = Mlp(27, mid_channels, mid_channels)
         self.depth_se = SELayer(mid_channels)
         self.depth_conv = nn.Sequential(
@@ -239,7 +177,7 @@ class DepthNet(nn.Module):
                       padding=0),
         )
 
-    def forward(self, x, mats_dict):
+    def forward(self, x_depth, x_edge, mats_dict):
         batch_size, num_cams, _, _ = mats_dict['sensor2ego_mats'].shape
         intrins = mats_dict['intrin_mats']
         ida = mats_dict['ida_mats']
@@ -264,12 +202,13 @@ class DepthNet(nn.Module):
         sensor2ego = sensor2ego[:, :, :3, :].reshape(batch_size, num_cams, -1)
         mlp_input = torch.cat([mlp_input, sensor2ego], dim=-1)
         mlp_input = self.bn(mlp_input.reshape(-1, mlp_input.shape[-1]))
-        x = self.reduce_conv(x)
+        x_edge = self.reduce_edge_conv(x_edge)
         context_se = self.context_mlp(mlp_input)[..., None, None]
-        context = self.context_se(x, context_se)
+        context = self.context_se(x_edge, context_se)
         context = self.context_conv(context)
+        x_depth = self.reduce_depth_conv(x_depth)
         depth_se = self.depth_mlp(mlp_input)[..., None, None]
-        depth = self.depth_se(x, depth_se)
+        depth = self.depth_se(x_depth, depth_se)
         depth = self.depth_conv(depth)
         return torch.cat([depth, context], dim=1)
 
@@ -320,37 +259,10 @@ class DepthLSSTransform(BaseDepthTransform):
             nn.BatchNorm2d(64),
             nn.ReLU(True),
         )
-        self.depthnet = DepthNet(in_channels + 64, in_channels, self.C, self.D)
-        self.edgenet = nn.Sequential(
-            nn.Conv2d(in_channels + 64, in_channels, 3, padding=1),
-            nn.BatchNorm2d(in_channels),
-            nn.ReLU(True),
-            nn.Conv2d(in_channels, in_channels, 3, padding=1),
-            nn.BatchNorm2d(in_channels),
-            nn.ReLU(True),
-            nn.Conv2d(in_channels, self.D + self.C, 1),
-        )
+        self.depth_edge_net = DepthEdgeNet(in_channels + 64, in_channels, self.C, self.D)
         if downsample > 1:
             assert downsample == 2, downsample
-            self.downsample1 = nn.Sequential(
-                nn.Conv2d(out_channels, out_channels, 3, padding=1, bias=False),
-                nn.BatchNorm2d(out_channels),
-                nn.ReLU(True),
-                nn.Conv2d(
-                    out_channels,
-                    out_channels,
-                    3,
-                    stride=downsample,
-                    padding=1,
-                    bias=False,
-                ),
-                nn.BatchNorm2d(out_channels),
-                nn.ReLU(True),
-                nn.Conv2d(out_channels, out_channels, 3, padding=1, bias=False),
-                nn.BatchNorm2d(out_channels),
-                nn.ReLU(True),
-            )
-            self.downsample2 = nn.Sequential(
+            self.downsample = nn.Sequential(
                 nn.Conv2d(out_channels, out_channels, 3, padding=1, bias=False),
                 nn.BatchNorm2d(out_channels),
                 nn.ReLU(True),
@@ -370,16 +282,6 @@ class DepthLSSTransform(BaseDepthTransform):
             )
         else:
             self.downsample = nn.Identity()
-
-        self.fusion_conv = nn.Sequential(
-            nn.Conv2d(out_channels * 2, out_channels, kernel_size=3, stride=1, padding=1, bias=False),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(True)
-        )
-
-        if self.use_bevpool == 'matrixvt':
-            self.horiconv = HoriConv(self.C, 512, self.C)
-            self.depth_reducer = DepthReducer(self.C, self.C)
 
     def get_downsampled_gt_depth(self, gt_depths, downsample=8):
         B, N, H, W = gt_depths.shape
@@ -419,28 +321,31 @@ class DepthLSSTransform(BaseDepthTransform):
         x = x.view(B * N, C, fH, fW)
 
         d = self.dtransform(d)
-        x1 = torch.cat([d, x], dim=1)
-        x1 = self.depthnet(x1, mats_dict)
-
+        x_depth = torch.cat([d, x], dim=1)
         e = self.etransform(e)
-        x2 = torch.cat([e, x], dim=1)
-        x2 = self.edgenet(x2)
+        x_edge = torch.cat([e, x], dim=1)
+        x = self.depth_edge_net(x_depth, x_edge, mats_dict)
 
-        depth1 = x1[:, : self.D].softmax(dim=1)
-        depth2 = x2[:, : self.D].softmax(dim=1)
-        context = x1[:, self.D: (self.D + self.C)] + x2[:, self.D: (self.D + self.C)]
-        depth1 = depth1.view(B, N, self.D, fH, fW)
-        depth2 = depth2.view(B, N, self.D, fH, fW)
-        context = context.view(B, N, self.C, fH, fW)
+        if self.use_bevpool == 'bevpoolv1':
+            depth = x[:, : self.D].softmax(dim=1)
+            x = depth.unsqueeze(1) * x[:, self.D: (self.D + self.C)].unsqueeze(2)
+            x = x.view(B, N, self.C, self.D, fH, fW)
+            x = x.permute(0, 1, 3, 4, 5, 2)
 
-        return context, depth1, depth2
+        elif self.use_bevpool == 'bevpoolv2':
+            depth = x[:, : self.D].softmax(dim=1)
+            x = x[:, self.D: (self.D + self.C)]
+            depth = depth.view(B, N, self.D, fH, fW)
+            x = x.view(B, N, self.C, fH, fW)
+
+        return x, depth
 
     def forward(self, *args, **kwargs):
         if self.use_depth:
             x = super().forward(*args, **kwargs)
-            final_x = self.fusion_conv(torch.cat([self.downsample1(x[0]), self.downsample2(x[1])], dim=1)), x[2]
+            final_x = self.downsample(x[0]), x[1]
             return final_x
         else:
             x = super().forward(*args, **kwargs)
-            x = self.fusion_conv(torch.cat([self.downsample1(x[0]), self.downsample2(x[1])], dim=1))
+            x = self.downsample(x)
             return x
