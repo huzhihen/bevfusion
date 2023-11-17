@@ -5,7 +5,7 @@ from mmcv.runner import force_fp32
 from torch import nn
 from torch.nn import functional as F
 
-from mmdet3d.ops import bev_pool
+from mmdet3d.ops.bev_pool.bev_pool import bev_pool
 from mmdet3d.ops.bev_pool_v2.bev_pool import bev_pool_v2
 
 __all__ = ["BaseTransform", "BaseDepthTransform"]
@@ -39,9 +39,9 @@ class BaseTransform(nn.Module):
             dbound: Tuple[float, float, float],
             use_points='lidar',
             depth_input='scalar',
-            height_expand=False,
-            add_depth_features=False,
-            use_bevpool='bevpoolv2',
+            height_expand=True,
+            add_depth_features=True,
+            use_bevpool='bevpoolv1',
             use_depth=False,
     ) -> None:
         super().__init__()
@@ -412,8 +412,9 @@ class BaseDepthTransform(BaseTransform):
                         boolmask2idx(on_img[c])].transpose(0, 1)
 
         step = 7
-        B, N, C, H, W = depth.size()  # [B, N, 1, 256, 704]
-        depth_tmp = depth.reshape(B * N, C, H, W)
+        depth_tmp = depth[:, :, 0].unsqueeze(dim=2)  # [B, N, 1, 256, 704]
+        B, N, C, H, W = depth_tmp.size()
+        depth_tmp = depth_tmp.reshape(B * N, C, H, W)
         pad = (step - 1) // 2
         depth_tmp = F.pad(depth_tmp, [pad, pad, pad, pad], mode='constant', value=0)
         patches = depth_tmp.unfold(dimension=2, size=step, step=1)

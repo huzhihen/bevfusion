@@ -8,14 +8,43 @@ from mmdet3d.models.builder import FUSERS
 __all__ = ["LidarCameraFusion"]
 
 
+class LidarCameraCrossAttention(nn.Module):
+    def __init__(self, camera_channel, lidar_channel, reduction=16):
+        super(LidarCameraCrossAttention, self).__init__()
+        self.camera_avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.camera_fc = nn.Sequential(
+            nn.Linear(camera_channel, reduction, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Linear(reduction, lidar_channel, bias=False),
+            nn.Sigmoid()
+        )
+        self.lidar_avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.lidar_fc = nn.Sequential(
+            nn.Linear(lidar_channel, reduction, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Linear(reduction, camera_channel, bias=False),
+            nn.Sigmoid()
+        )
+
+    def forward(self, camera_feature_x, lidar_feature_x):
+        camera_b, camera_c, _, _ = camera_feature_x.size()
+        lidar_b, lidar_c, _, _ = lidar_feature_x.size()
+        camera_feature_y = self.camera_avg_pool(camera_feature_x).view(camera_b, camera_c)
+        camera_feature_y = self.camera_fc(camera_feature_y).view(camera_b, lidar_c, 1, 1)
+        lidar_feature_y = self.lidar_avg_pool(lidar_feature_x).view(lidar_b, lidar_c)
+        lidar_feature_y = self.lidar_fc(lidar_feature_y).view(lidar_b, camera_c, 1, 1)
+        return camera_feature_x * lidar_feature_y.expand_as(camera_feature_x),\
+               lidar_feature_x * camera_feature_y.expand_as(lidar_feature_x)
+
+
 class ChannelAttention(nn.Module):
     def __init__(self, in_planes, ratio=16):
         super(ChannelAttention, self).__init__()
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
         self.max_pool = nn.AdaptiveMaxPool2d(1)
-        self.fc1      = nn.Conv2d(in_planes, in_planes // 16, 1, bias=False)
+        self.fc1      = nn.Conv2d(in_planes, in_planes // ratio, 1, bias=False)
         self.relu1    = nn.ReLU()
-        self.fc2      = nn.Conv2d(in_planes // 16, in_planes, 1, bias=False)
+        self.fc2      = nn.Conv2d(in_planes // ratio, in_planes, 1, bias=False)
         self.sigmoid  = nn.Sigmoid()
 
     def forward(self, x):
@@ -81,6 +110,7 @@ class LidarCameraFusion(nn.Module):
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
+        self.cross_attention = LidarCameraCrossAttention(in_channels[0], in_channels[1])
         self.fusion_conv = self._make_layer(block=LidarCameraFusion_Block,
                                             input_channels=sum(in_channels),
                                             output_channels=out_channels,
@@ -94,5 +124,6 @@ class LidarCameraFusion(nn.Module):
         return nn.Sequential(*layers)
 
     def forward(self, inputs: List[torch.Tensor]) -> torch.Tensor:
+        inputs = self.cross_attention(inputs[0], inputs[1])
         x = self.fusion_conv(torch.cat(inputs, dim=1))
         return x
