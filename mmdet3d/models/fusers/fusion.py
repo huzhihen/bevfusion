@@ -116,7 +116,7 @@ class LidarCameraFusion(nn.Module):
         self.fusion_conv = self._make_layer(block=LidarCameraFusion_Block,
                                             input_channels=sum(in_channels),
                                             output_channels=out_channels,
-                                            block_nums=2)
+                                            block_nums=1)
 
     def _make_layer(self, block, input_channels, output_channels, block_nums=1):
         layers = []

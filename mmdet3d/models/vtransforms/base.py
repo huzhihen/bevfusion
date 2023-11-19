@@ -39,8 +39,8 @@ class BaseTransform(nn.Module):
             dbound: Tuple[float, float, float],
             use_points='lidar',
             depth_input='scalar',
-            height_expand=True,
-            add_depth_features=True,
+            height_expand=False,
+            add_depth_features=False,
             use_bevpool='bevpoolv1',
             use_depth=False,
     ) -> None:
@@ -412,9 +412,8 @@ class BaseDepthTransform(BaseTransform):
                         boolmask2idx(on_img[c])].transpose(0, 1)
 
         step = 7
-        depth_tmp = depth[:, :, 0].unsqueeze(dim=2)  # [B, N, 1, 256, 704]
-        B, N, C, H, W = depth_tmp.size()
-        depth_tmp = depth_tmp.reshape(B * N, C, H, W)
+        B, N, C, H, W = depth.size()  # [B, N, 1, 256, 704]
+        depth_tmp = depth.reshape(B * N, C, H, W)
         pad = (step - 1) // 2
         depth_tmp = F.pad(depth_tmp, [pad, pad, pad, pad], mode='constant', value=0)
         patches = depth_tmp.unfold(dimension=2, size=step, step=1)
