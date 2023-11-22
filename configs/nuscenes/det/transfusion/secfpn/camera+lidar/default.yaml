@@ -24,7 +24,7 @@ model:
         feature_size: ${[image_size[0] // 8, image_size[1] // 8]}
         xbound: [-51.2, 51.2, 0.4]
         ybound: [-51.2, 51.2, 0.4]
-        zbound: [-5.0, 3.0, 8.0]
+        zbound: [-10.0, 10.0, 20.0]
         dbound: [1.0, 60.0, 0.5]
         downsample: 2
     lidar:

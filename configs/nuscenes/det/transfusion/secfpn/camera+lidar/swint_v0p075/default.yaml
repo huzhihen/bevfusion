@@ -28,6 +28,7 @@ model:
       vtransform:
         xbound: [-54.0, 54.0, 0.3]
         ybound: [-54.0, 54.0, 0.3]
+        zbound: [-5.0, 3.0, 8.0]
     lidar:
       voxelize:
         point_cloud_range: ${point_cloud_range}
