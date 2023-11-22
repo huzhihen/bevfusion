@@ -42,7 +42,7 @@ class BaseTransform(nn.Module):
             height_expand=False,
             add_depth_features=False,
             use_bevpool='bevpoolv1',
-            use_depth=False,
+            use_depth=True,
     ) -> None:
         super().__init__()
         self.in_channels = in_channels
