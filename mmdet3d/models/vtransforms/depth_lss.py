@@ -247,6 +247,9 @@ class DepthLSSTransform(BaseDepthTransform):
             nn.Conv2d(32, 64, 5, stride=2, padding=2),
             nn.BatchNorm2d(64),
             nn.ReLU(True),
+            nn.Conv2d(64, 64, 5, stride=1, padding=2),
+            nn.BatchNorm2d(64),
+            nn.ReLU(True),
         )
         self.etransform = nn.Sequential(
             nn.Conv2d(4, 8, 1),
@@ -256,6 +259,9 @@ class DepthLSSTransform(BaseDepthTransform):
             nn.BatchNorm2d(32),
             nn.ReLU(True),
             nn.Conv2d(32, 64, 5, stride=2, padding=2),
+            nn.BatchNorm2d(64),
+            nn.ReLU(True),
+            nn.Conv2d(64, 64, 5, stride=1, padding=2),
             nn.BatchNorm2d(64),
             nn.ReLU(True),
         )
