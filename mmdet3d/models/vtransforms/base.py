@@ -42,7 +42,8 @@ class BaseTransform(nn.Module):
             height_expand=False,
             add_depth_features=False,
             use_bevpool='bevpoolv1',
-            use_depth=False,
+            use_depth=True,
+            depth_threshold=0,
     ) -> None:
         super().__init__()
         self.in_channels = in_channels
@@ -71,6 +72,7 @@ class BaseTransform(nn.Module):
         self.C = out_channels
         self.frustum = self.create_frustum()
         self.D = self.frustum.shape[0]
+        self.depth_threshold = 1 / self.D
         self.fp16_enabled = False
 
     @force_fp32()
@@ -149,7 +151,7 @@ class BaseTransform(nn.Module):
         raise NotImplementedError
 
     @force_fp32()
-    def bev_pool(self, geom_feats, x):
+    def bev_pool(self, geom_feats, x, depth_kept):
         B, N, D, H, W, C = x.shape
         Nprime = B * N * D * H * W
 
@@ -176,6 +178,7 @@ class BaseTransform(nn.Module):
                 & (geom_feats[:, 2] >= 0)
                 & (geom_feats[:, 2] < self.nx[2])
         )
+        kept &= depth_kept.view(Nprime).type_as(kept)
         x = x[kept]
         geom_feats = geom_feats[kept]
 
@@ -186,10 +189,10 @@ class BaseTransform(nn.Module):
 
         return final
 
-    def voxel_pooling_v2(self, coor, depth, feat):
+    def voxel_pooling_v2(self, coor, depth, feat, depth_kept):
         ranks_bev, ranks_depth, ranks_feat, \
         interval_starts, interval_lengths = \
-            self.voxel_pooling_prepare_v2(coor)
+            self.voxel_pooling_prepare_v2(coor, depth_kept)
         if ranks_feat is None:
             print('warning ---> no points within the predefined '
                   'bev receptive field')
@@ -211,7 +214,7 @@ class BaseTransform(nn.Module):
         bev_feat = torch.cat(bev_feat.unbind(dim=2), 1)
         return bev_feat
 
-    def voxel_pooling_prepare_v2(self, coor):
+    def voxel_pooling_prepare_v2(self, coor, depth_kept):
         B, N, D, H, W, _ = coor.shape
         num_points = B * N * D * H * W
         # record the index of selected points for acceleration purpose
@@ -233,6 +236,7 @@ class BaseTransform(nn.Module):
         kept = (coor[:, 0] >= 0) & (coor[:, 0] < self.nx[0]) & \
                (coor[:, 1] >= 0) & (coor[:, 1] < self.nx[1]) & \
                (coor[:, 2] >= 0) & (coor[:, 2] < self.nx[2])
+        kept &= depth_kept.view(num_points).type_as(kept)
         if len(kept) == 0:
             return None, None, None, None, None
         coor, ranks_depth, ranks_feat = \
@@ -457,12 +461,13 @@ class BaseDepthTransform(BaseTransform):
 
         if type(x) == tuple:
             x, depth = x
+            depth_kept = (depth >= self.depth_threshold)
 
         if self.use_bevpool == 'bevpoolv1':
-            x = self.bev_pool(geom, x)
+            x = self.bev_pool(geom, x, depth_kept)
 
         elif self.use_bevpool == 'bevpoolv2':
-            x = self.voxel_pooling_v2(geom, depth, x)
+            x = self.voxel_pooling_v2(geom, depth, x, depth_kept)
             B, N, D, H, W = depth.shape
             depth = depth.view(B * N, D, H, W)
 
