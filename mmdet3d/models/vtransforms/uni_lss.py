@@ -12,7 +12,7 @@ from mmdet3d.models.builder import VTRANSFORMS
 
 from .base import BaseDepthTransform
 
-__all__ = ["DepthLSSTransform"]
+__all__ = ["UniLSSTransform"]
 
 
 class _ASPPModule(nn.Module):
@@ -214,7 +214,7 @@ class DepthEdgeNet(nn.Module):
 
 
 @VTRANSFORMS.register_module()
-class DepthLSSTransform(BaseDepthTransform):
+class UniLSSTransform(BaseDepthTransform):
     def __init__(
         self,
         in_channels: int,

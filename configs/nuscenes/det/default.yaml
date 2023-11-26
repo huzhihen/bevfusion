@@ -10,7 +10,7 @@ radar_jitter: 0
 radar_normalize: false
 
 model:
-  type: BEVFusion
+  type: UniBEVFusion
   encoders: null
   fuser: null
   heads:
