@@ -18,11 +18,11 @@ from mmdet3d.models import FUSIONMODELS
 
 from .base import Base3DFusionModel
 
-__all__ = ["UniBEVFusion"]
+__all__ = ["BEVFusion"]
 
 
 @FUSIONMODELS.register_module()
-class UniBEVFusion(Base3DFusionModel):
+class BEVFusion(Base3DFusionModel):
     def __init__(
         self,
         encoders: Dict[str, Any],
