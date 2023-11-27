@@ -18,11 +18,11 @@ from mmdet3d.models import FUSIONMODELS
 
 from .base import Base3DFusionModel
 
-__all__ = ["BEVFusion"]
+__all__ = ["UniBEVFusion"]
 
 
 @FUSIONMODELS.register_module()
-class BEVFusion(Base3DFusionModel):
+class UniBEVFusion(Base3DFusionModel):
     def __init__(
         self,
         encoders: Dict[str, Any],
@@ -93,8 +93,8 @@ class BEVFusion(Base3DFusionModel):
                     self.loss_scale[name] = 1.0
 
         # If the camera's vtransform is a BEVDepth version, then we're using depth loss. 
-        # self.use_depth_loss = ((encoders.get('camera', {}) or {}).get('vtransform', {}) or {}).get('type', '') in ['BEVDepth', 'AwareBEVDepth', 'DBEVDepth', 'AwareDBEVDepth']
-        self.use_depth_loss = True
+        self.use_depth_loss = ((encoders.get('camera', {}) or {}).get('vtransform', {}) or {}).get('type', '') in ['BEVDepth', 'AwareBEVDepth', 'DBEVDepth', 'AwareDBEVDepth']
+        # self.use_depth_loss = True
 
         self.init_weights()
 

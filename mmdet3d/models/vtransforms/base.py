@@ -42,7 +42,7 @@ class BaseTransform(nn.Module):
             height_expand=False,
             add_depth_features=False,
             use_bevpool='bevpoolv1',
-            use_depth=True,
+            use_depth=False,
             depth_threshold=0,
     ) -> None:
         super().__init__()
