@@ -15,6 +15,59 @@ from .base import BaseDepthTransform
 __all__ = ["UniLSSTransform"]
 
 
+class Map_Block(nn.Module):
+    def __init__(self, in_channels, out_channels, stride=1):
+        super(Map_Block, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1, bias=False)
+        self.bn1   = nn.BatchNorm2d(out_channels)
+        self.relu  = nn.ReLU(inplace=True)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False)
+        self.bn2   = nn.BatchNorm2d(out_channels)
+        if stride != 1 or out_channels != in_channels:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride),
+                nn.BatchNorm2d(out_channels))
+        else:
+            self.shortcut = None
+
+    def forward(self, x):
+        residual = x
+        if self.shortcut is not None:
+            residual = self.shortcut(x)
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+        out = self.conv2(out)
+        out = self.bn2(out)
+        out += residual
+        out = self.relu(out)
+        return out
+
+
+class MapNet(nn.Module):
+    def __init__(self, block,  input_channel, nb_filter, block_nums):
+        super(MapNet, self).__init__()
+        self.pool = nn.MaxPool2d(2, 2)
+        self.conv0 = self._make_layer(block, input_channel, nb_filter[0])
+        self.conv1 = self._make_layer(block, nb_filter[0], nb_filter[1], block_nums[0])
+        self.conv2 = self._make_layer(block, nb_filter[1], nb_filter[2], block_nums[1])
+        self.conv3 = self._make_layer(block, nb_filter[2], nb_filter[3], block_nums[2])
+
+    def _make_layer(self, block, input_channels, output_channels, block_nums=1):
+        layers = []
+        layers.append(block(input_channels, output_channels))
+        for i in range(block_nums - 1):
+            layers.append(block(output_channels, output_channels))
+        return nn.Sequential(*layers)
+
+    def forward(self, input):
+        x0 = self.conv0(input)           # x0->256*704*8
+        x1 = self.conv1(self.pool(x0))   # x1->128*352*16
+        x2 = self.conv2(self.pool(x1))   # x2->64*176*32
+        x3 = self.conv3(self.pool(x2))   # x3->32*88*64
+        return x3
+
+
 class _ASPPModule(nn.Module):
 
     def __init__(self, inplanes, planes, kernel_size, padding, dilation,
@@ -237,34 +290,10 @@ class UniLSSTransform(BaseDepthTransform):
             zbound=zbound,
             dbound=dbound,
         )
-        self.dtransform = nn.Sequential(
-            nn.Conv2d(1, 8, 1),
-            nn.BatchNorm2d(8),
-            nn.ReLU(True),
-            nn.Conv2d(8, 32, 5, stride=4, padding=2),
-            nn.BatchNorm2d(32),
-            nn.ReLU(True),
-            nn.Conv2d(32, 64, 5, stride=2, padding=2),
-            nn.BatchNorm2d(64),
-            nn.ReLU(True),
-            nn.Conv2d(64, 64, 5, stride=1, padding=2),
-            nn.BatchNorm2d(64),
-            nn.ReLU(True),
-        )
-        self.etransform = nn.Sequential(
-            nn.Conv2d(4, 8, 1),
-            nn.BatchNorm2d(8),
-            nn.ReLU(True),
-            nn.Conv2d(8, 32, 5, stride=4, padding=2),
-            nn.BatchNorm2d(32),
-            nn.ReLU(True),
-            nn.Conv2d(32, 64, 5, stride=2, padding=2),
-            nn.BatchNorm2d(64),
-            nn.ReLU(True),
-            nn.Conv2d(64, 64, 5, stride=1, padding=2),
-            nn.BatchNorm2d(64),
-            nn.ReLU(True),
-        )
+        self.depthmapnet = MapNet(block=Map_Block, input_channel=1, nb_filter=[8, 16, 32, 64],
+                                  block_nums=[2, 2, 2])
+        self.edgemapnet = MapNet(block=Map_Block, input_channel=4, nb_filter=[8, 16, 32, 64],
+                                  block_nums=[2, 2, 2])
         self.depth_edge_net = DepthEdgeNet(in_channels + 64, in_channels, self.C, self.D)
         if downsample > 1:
             assert downsample == 2, downsample
@@ -326,9 +355,9 @@ class UniLSSTransform(BaseDepthTransform):
         e = e.view(B * N, *e.shape[2:])
         x = x.view(B * N, C, fH, fW)
 
-        d = self.dtransform(d)
+        d = self.depthmapnet(d)
         x_depth = torch.cat([d, x], dim=1)
-        e = self.etransform(e)
+        e = self.edgemapnet(e)
         x_edge = torch.cat([e, x], dim=1)
         x = self.depth_edge_net(x_depth, x_edge, mats_dict)
 
