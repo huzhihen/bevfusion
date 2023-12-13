@@ -8,30 +8,28 @@ from mmdet3d.models.builder import FUSERS
 __all__ = ["LidarCameraFusion"]
 
 
-class LidarCameraCrossAttention(nn.Module):
-    def __init__(self, channels1, channels2, factor=8):
-        super(LidarCameraCrossAttention, self).__init__()
+class LidarCameraMultiScaleAttention(nn.Module):
+    def __init__(self, channels, factor=8):
+        super(LidarCameraMultiScaleAttention, self).__init__()
         self.groups = factor
-        assert channels1 // self.groups > 0
+        assert channels // self.groups > 0
         self.softmax = nn.Softmax(-1)
         self.avg_pool = nn.AdaptiveAvgPool2d((1, 1))
         self.pool_h = nn.AdaptiveAvgPool2d((None, 1))
         self.pool_w = nn.AdaptiveAvgPool2d((1, None))
-        self.gn = nn.GroupNorm(channels1 // self.groups, channels1 // self.groups)
-        self.conv1x1 = nn.Conv2d(channels1 // self.groups, channels1 // self.groups, kernel_size=1, stride=1, padding=0)
-        self.conv3x3 = nn.Conv2d(channels2 // self.groups, channels1 // self.groups, kernel_size=3, stride=1, padding=1)
+        self.gn = nn.GroupNorm(channels // self.groups, channels // self.groups)
+        self.conv1x1 = nn.Conv2d(channels // self.groups, channels // self.groups, kernel_size=1, stride=1, padding=0)
+        self.conv3x3 = nn.Conv2d(channels // self.groups, channels // self.groups, kernel_size=3, stride=1, padding=1)
 
-    def forward(self, x, y):
+    def forward(self, x):
         b, c, h, w = x.size()
-        B, C, H, W = y.size()
         group_x = x.reshape(b * self.groups, -1, h, w)  # b*g, c//g, h, w
-        group_y = y.reshape(B * self.groups, -1, H, W)  # B*g, C//g, H, W
         x_h = self.pool_h(group_x)
         x_w = self.pool_w(group_x).permute(0, 1, 3, 2)
         hw = self.conv1x1(torch.cat([x_h, x_w], dim=2))
         x_h, x_w = torch.split(hw, [h, w], dim=2)
         x1 = self.gn(group_x * x_h.sigmoid() * x_w.permute(0, 1, 3, 2).sigmoid())
-        x2 = self.conv3x3(group_y)  # b*g, c//g, h, w
+        x2 = self.conv3x3(group_x)
         x11 = self.softmax(self.avg_pool(x1).reshape(b * self.groups, -1, 1).permute(0, 2, 1))
         x12 = x2.reshape(b * self.groups, c // self.groups, -1)  # b*g, c//g, hw
         x21 = self.softmax(self.avg_pool(x2).reshape(b * self.groups, -1, 1).permute(0, 2, 1))
@@ -113,7 +111,8 @@ class LidarCameraFusion(nn.Module):
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
-        self.cross_attention = LidarCameraCrossAttention(in_channels[0], in_channels[1])
+        self.camera_multiscale_attention = LidarCameraMultiScaleAttention(in_channels[0])
+        self.lidar_multiscale_attention = LidarCameraMultiScaleAttention(in_channels[1])
         self.fusion_conv = self._make_layer(block=LidarCameraFusion_Block,
                                             input_channels=sum(in_channels),
                                             output_channels=out_channels,
@@ -127,6 +126,6 @@ class LidarCameraFusion(nn.Module):
         return nn.Sequential(*layers)
 
     def forward(self, inputs: List[torch.Tensor]) -> torch.Tensor:
-        inputs[0] = self.cross_attention(inputs[0], inputs[1])
+        inputs = self.camera_multiscale_attention(inputs[0]), self.lidar_multiscale_attention(inputs[1])
         x = self.fusion_conv(torch.cat(inputs, dim=1))
         return x
