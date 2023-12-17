@@ -42,6 +42,11 @@ def main():
     # dump config
     cfg.dump(os.path.join(cfg.run_dir, "configs.yaml"))
 
+    # lr_config and momentum_config
+    cfg.optimizer.betas = tuple(cfg.optimizer.betas)
+    cfg.lr_config.target_ratio = tuple(cfg.lr_config.target_ratio)
+    cfg.momentum_config.target_ratio = tuple(cfg.momentum_config.target_ratio)
+
     # init the logger before other steps
     timestamp = time.strftime("%Y%m%d_%H%M%S", time.localtime())
     log_file = os.path.join(cfg.run_dir, f"{timestamp}.log")
