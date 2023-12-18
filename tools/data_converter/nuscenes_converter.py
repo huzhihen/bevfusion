@@ -99,6 +99,10 @@ def create_nuscenes_infos(root_path,
         info_val_path = osp.join(root_path,
                                  '{}_infos_val.pkl'.format(info_prefix))
         mmcv.dump(data, info_val_path)
+        data['infos'] = train_nusc_infos + val_nusc_infos
+        info_val_path = osp.join(root_path,
+                                 '{}_infos_trainval.pkl'.format(info_prefix))
+        mmcv.dump(data, info_val_path)
 
 
 def get_available_scenes(nusc):

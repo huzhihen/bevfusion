@@ -281,6 +281,7 @@ class NuScenesDataset(Custom3DDataset):
                 data["camera2lidar"].append(camera2lidar)
 
         annos = self.get_ann_info(index)
+        # annos = None
         data["ann_info"] = annos
         return data
 
