@@ -290,6 +290,28 @@ class UniLSSTransform(BaseDepthTransform):
             zbound=zbound,
             dbound=dbound,
         )
+        # self.depthmapnet = nn.Sequential(
+        #     nn.Conv2d(1, 8, 1),
+        #     nn.BatchNorm2d(8),
+        #     nn.ReLU(True),
+        #     nn.Conv2d(8, 32, 5, stride=4, padding=2),
+        #     nn.BatchNorm2d(32),
+        #     nn.ReLU(True),
+        #     nn.Conv2d(32, 64, 5, stride=2, padding=2),
+        #     nn.BatchNorm2d(64),
+        #     nn.ReLU(True),
+        # )
+        # self.edgemapnet = nn.Sequential(
+        #     nn.Conv2d(4, 8, 1),
+        #     nn.BatchNorm2d(8),
+        #     nn.ReLU(True),
+        #     nn.Conv2d(8, 32, 5, stride=4, padding=2),
+        #     nn.BatchNorm2d(32),
+        #     nn.ReLU(True),
+        #     nn.Conv2d(32, 64, 5, stride=2, padding=2),
+        #     nn.BatchNorm2d(64),
+        #     nn.ReLU(True),
+        # )
         self.depthmapnet = MapNet(block=Map_Block, input_channel=1, nb_filter=[8, 16, 32, 64],
                                   block_nums=[2, 2, 2])
         self.edgemapnet = MapNet(block=Map_Block, input_channel=4, nb_filter=[8, 16, 32, 64],

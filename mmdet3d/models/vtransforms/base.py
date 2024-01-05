@@ -41,7 +41,7 @@ class BaseTransform(nn.Module):
             depth_input='scalar',
             height_expand=False,
             add_depth_features=False,
-            use_bevpool='bevpoolv1',
+            use_bevpool='bevpoolv2',
             use_depth=False,
             depth_threshold=0,
     ) -> None:
